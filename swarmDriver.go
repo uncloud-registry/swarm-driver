@@ -23,9 +23,9 @@ import (
 	"github.com/ethersphere/bee/pkg/file/splitter"
 	"github.com/ethersphere/bee/pkg/swarm"
 
-	"github.com/Raviraj2000/swarmdriver/lookuper"
-	"github.com/Raviraj2000/swarmdriver/publisher"
-	"github.com/Raviraj2000/swarmdriver/store"
+	"github.com/uncloud-registry/swarm-driver/lookuper"
+	"github.com/uncloud-registry/swarm-driver/publisher"
+	"github.com/uncloud-registry/swarm-driver/store"
 )
 
 const driverName = "swarm"

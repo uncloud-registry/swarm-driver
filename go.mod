@@ -1,4 +1,4 @@
-module github.com/Raviraj2000/swarmdriver
+module github.com/uncloud-registry/swarm-driver
 
 go 1.22.4
 

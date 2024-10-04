@@ -3,10 +3,10 @@ package swarmdriver
 import (
 	"testing"
 
-	"github.com/Raviraj2000/swarmdriver/store/teststore"
 	storagedriver "github.com/distribution/distribution/v3/registry/storage/driver"
 	"github.com/distribution/distribution/v3/registry/storage/driver/testsuites"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/uncloud-registry/swarm-driver/store/teststore"
 )
 
 func newSwarmDriverConstructor() (storagedriver.StorageDriver, error) {
