@@ -3,6 +3,7 @@ package swarmdriver
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,7 +17,6 @@ import (
 
 	storagedriver "github.com/distribution/distribution/v3/registry/storage/driver"
 	"github.com/distribution/distribution/v3/registry/storage/driver/factory"
-	"github.com/ethereum/go-ethereum/common"
 	beecrypto "github.com/ethersphere/bee/pkg/crypto"
 	"github.com/ethersphere/bee/pkg/file"
 	"github.com/ethersphere/bee/pkg/file/joiner"
@@ -26,6 +26,7 @@ import (
 	"github.com/uncloud-registry/swarm-driver/lookuper"
 	"github.com/uncloud-registry/swarm-driver/publisher"
 	"github.com/uncloud-registry/swarm-driver/store"
+	"github.com/uncloud-registry/swarm-driver/store/teststore"
 )
 
 const driverName = "swarm"
@@ -42,27 +43,6 @@ func init() {
 
 // swarmDriverFactory implements the factory.StorageDriverFactory interface.
 type swarmDriverFactory struct{}
-
-// Create initializes a new instance of the swarmDriver with the provided parameters.
-func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[string]interface{}) (storagedriver.StorageDriver, error) {
-	// Extract the Ethereum address from the parameters.
-	addr, ok := parameters["addr"].(common.Address)
-	if !ok {
-		return nil, fmt.Errorf("Create: missing or invalid 'addr' parameter")
-	}
-	// Extract the store interface from the parameters.
-	store, ok := parameters["store"].(store.PutGetter)
-	if !ok {
-		return nil, fmt.Errorf("Create: missing or invalid 'store' parameter")
-	}
-	// Extract the encryption flag from the parameters.
-	encrypt, ok := parameters["encrypt"].(bool)
-	if !ok {
-		return nil, fmt.Errorf("Create: missing or invalid 'encrypt' parameter")
-	}
-	// Create and return a new instance of swarmDriver.
-	return New(addr, store, encrypt), nil
-}
 
 // Publisher is an interface for publishing data references.
 type Publisher interface {
@@ -98,6 +78,20 @@ type metaData struct {
 
 var _ storagedriver.StorageDriver = &swarmDriver{}
 
+// Create initializes a new instance of the swarmDriver with the provided parameters.
+func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[string]interface{}) (storagedriver.StorageDriver, error) {
+	encrypt, ok := parameters["encrypt"].(bool)
+	if !ok {
+		return nil, fmt.Errorf("Create: missing or invalid 'encrypt' parameter")
+	}
+	privateKey, ok := parameters["privateKey"].(string)
+	if !ok {
+		return nil, fmt.Errorf("Create: missing or invalid 'privateKey' parameter")
+	}
+	// Pass the signer to the New function instead of generating the key inside.
+	return New(privateKey, encrypt), nil
+}
+
 // Check if address is a zero address
 func isZeroAddress(ref swarm.Address) bool {
 	if ref.Equal(swarm.ZeroAddress) {
@@ -107,26 +101,22 @@ func isZeroAddress(ref swarm.Address) bool {
 	return swarm.NewAddress(zeroAddr).Equal(ref)
 }
 
-// New constructs a new Driver.
 // New constructs a new swarmDriver instance.
-func New(addr common.Address, store store.PutGetter, encrypt bool) *swarmDriver {
+func New(privateKeyStr string, encrypt bool) *swarmDriver {
 	logger.Debug("Creating New Swarm Driver")
-	// Generate a new Secp256k1 private key.
-	pk, err := beecrypto.GenerateSecp256k1Key()
-	if err != nil {
-		panic(err)
-	}
-	// Create a new signer using the generated private key.
-	signer := beecrypto.NewDefaultSigner(pk)
-	// Get the Ethereum address associated with the signer.
-	ethAddress, err := signer.EthereumAddress()
-	if err != nil {
-		panic(err)
-	}
+	store := teststore.NewSwarmInMemoryStore()
+	// Step 1: Convert hex string to bytes
+	privKeyBytes, _ := hex.DecodeString(privateKeyStr)
+	// Step 2: Convert bytes to Secp256k1 private key
+	privateKey := beecrypto.Secp256k1PrivateKeyFromBytes(privKeyBytes)
+	// Step 3: Create a signer using the private key
+	signer := beecrypto.NewDefaultSigner(privateKey)
+	// Step 4: Derive the Ethereum address from the signer
+	ethAddress, _ := signer.EthereumAddress()
 	// Initialize the lookuper with the store and Ethereum address.
 	lk := lookuper.New(store, ethAddress)
 	// Initialize the publisher with the store, signer, and the latest lookuper.
-	pb := publisher.New(store, signer, lookuper.Latest(store, addr))
+	pb := publisher.New(store, signer, lookuper.Latest(store, ethAddress))
 	// Initialize the splitter for splitting files into chunks.
 	splitter := splitter.NewSimpleSplitter(store)
 	// Create a new instance of swarmDriver with the provided parameters.
