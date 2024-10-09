@@ -8,6 +8,7 @@ require (
 	github.com/distribution/distribution/v3 v3.0.0-beta.1
 	github.com/ethereum/go-ethereum v1.13.4
 	github.com/ethersphere/bee v1.18.2
+	github.com/gorilla/websocket v1.5.3
 	github.com/ipfs/go-log/v2 v2.5.1
 )
 
