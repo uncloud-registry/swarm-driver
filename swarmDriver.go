@@ -26,6 +26,8 @@ import (
 	"github.com/uncloud-registry/swarm-driver/lookuper"
 	"github.com/uncloud-registry/swarm-driver/publisher"
 	"github.com/uncloud-registry/swarm-driver/store"
+	"github.com/uncloud-registry/swarm-driver/store/beestore"
+	"github.com/uncloud-registry/swarm-driver/store/feedstore"
 	"github.com/uncloud-registry/swarm-driver/store/teststore"
 )
 
@@ -84,42 +86,56 @@ func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[st
 	if !ok {
 		return nil, fmt.Errorf("Create: missing or invalid 'encrypt' parameter")
 	}
-	privateKey, ok := parameters["privateKey"].(string)
+	privateKeyStr, ok := parameters["privateKey"].(string)
 	if !ok {
 		return nil, fmt.Errorf("Create: missing or invalid 'privateKey' parameter")
 	}
-	// Pass the signer to the New function instead of generating the key inside.
-	return New(privateKey, encrypt), nil
-}
-
-// Check if address is a zero address
-func isZeroAddress(ref swarm.Address) bool {
-	if ref.Equal(swarm.ZeroAddress) {
-		return true
+	inmemory, ok := parameters["inmemory"].(bool)
+	if !ok {
+		return nil, fmt.Errorf("Create: missing or invalid 'inmemory' parameter")
 	}
-	zeroAddr := make([]byte, 32)
-	return swarm.NewAddress(zeroAddr).Equal(ref)
+	privKeyBytes, _ := hex.DecodeString(privateKeyStr)
+	privateKey := beecrypto.Secp256k1PrivateKeyFromBytes(privKeyBytes)
+	signer := beecrypto.NewDefaultSigner(privateKey)
+	ethAddress, _ := signer.EthereumAddress()
+	var lk Lookuper
+	var pb Publisher
+	var store store.PutGetter
+	var newSplitter file.Splitter
+
+	if inmemory {
+		logger.Debug("Creating New Inmemory Swarm Driver")
+		store = teststore.NewSwarmInMemoryStore()
+		lk = lookuper.New(store, ethAddress)
+		// Initialize the publisher with the store, signer, and the latest lookuper.
+		pb = publisher.New(store, signer, lookuper.Latest(store, ethAddress))
+		// Initialize the splitter for splitting files into chunks.
+		newSplitter = splitter.NewSimpleSplitter(store)
+	} else {
+		logger.Debug("Creating New Bee Swarm Driver")
+		// Create a new instance of BeeStore
+		store, err := beestore.NewBeeStore("localhost", 1633, false, false, "default", false)
+		if err != nil {
+			return nil, fmt.Errorf("Create: failed to create BeeStore: %v", err)
+		}
+		// Create a new instance of FeedStore
+		fstore, err := feedstore.NewFeedStore("localhost", 1634, false, false, "default", "default")
+		if err != nil {
+			return nil, fmt.Errorf("Create: failed to create feedstore: %v", err)
+		}
+		lk = lookuper.New(fstore, ethAddress)
+		pb = publisher.New(fstore, signer, lookuper.Latest(fstore, ethAddress))
+		newSplitter = splitter.NewSimpleSplitter(store)
+	}
+
+	// Pass the signer to the New function instead of generating the key inside.
+	return New(lk, pb, store, newSplitter, encrypt), nil
 }
 
 // New constructs a new swarmDriver instance.
-func New(privateKeyStr string, encrypt bool) *swarmDriver {
+func New(lk Lookuper, pb Publisher, store store.PutGetter, splitter file.Splitter, encrypt bool) *swarmDriver {
 	logger.Debug("Creating New Swarm Driver")
-	store := teststore.NewSwarmInMemoryStore()
-	// Step 1: Convert hex string to bytes
-	privKeyBytes, _ := hex.DecodeString(privateKeyStr)
-	// Step 2: Convert bytes to Secp256k1 private key
-	privateKey := beecrypto.Secp256k1PrivateKeyFromBytes(privKeyBytes)
-	// Step 3: Create a signer using the private key
-	signer := beecrypto.NewDefaultSigner(privateKey)
-	// Step 4: Derive the Ethereum address from the signer
-	ethAddress, _ := signer.EthereumAddress()
-	// Initialize the lookuper with the store and Ethereum address.
-	lk := lookuper.New(store, ethAddress)
-	// Initialize the publisher with the store, signer, and the latest lookuper.
-	pb := publisher.New(store, signer, lookuper.Latest(store, ethAddress))
-	// Initialize the splitter for splitting files into chunks.
-	splitter := splitter.NewSimpleSplitter(store)
-	// Create a new instance of swarmDriver with the provided parameters.
+
 	d := &swarmDriver{
 		store:     store,
 		encrypt:   encrypt,
@@ -138,6 +154,15 @@ func New(privateKeyStr string, encrypt bool) *swarmDriver {
 // Implement the storagedriver.StorageDriver interface.
 func (d *swarmDriver) Name() string {
 	return driverName
+}
+
+// Check if address is a zero address
+func isZeroAddress(ref swarm.Address) bool {
+	if ref.Equal(swarm.ZeroAddress) {
+		return true
+	}
+	zeroAddr := make([]byte, 32)
+	return swarm.NewAddress(zeroAddr).Equal(ref)
 }
 
 // isValidPath checks if the provided path is valid according to certain rules.
