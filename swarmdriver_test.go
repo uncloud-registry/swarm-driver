@@ -1,4 +1,4 @@
-package swarmdriver
+package swarmdriver_test
 
 import (
 	"encoding/hex"
@@ -8,6 +8,7 @@ import (
 	"github.com/distribution/distribution/v3/registry/storage/driver/testsuites"
 	beecrypto "github.com/ethersphere/bee/pkg/crypto"
 	"github.com/ethersphere/bee/pkg/file/splitter"
+	swarmdriver "github.com/uncloud-registry/swarm-driver"
 	"github.com/uncloud-registry/swarm-driver/lookuper"
 	"github.com/uncloud-registry/swarm-driver/publisher"
 	"github.com/uncloud-registry/swarm-driver/store/teststore"
@@ -41,7 +42,7 @@ func newSwarmDriverConstructor() (storagedriver.StorageDriver, error) {
 	// Initialize the splitter for splitting files into chunks.
 	newSplitter := splitter.NewSimpleSplitter(store)
 
-	return New(lk, pb, store, newSplitter, encrypt), nil
+	return swarmdriver.New(lk, pb, store, newSplitter, encrypt), nil
 }
 
 func TestSwarmDriverSuite(t *testing.T) {
