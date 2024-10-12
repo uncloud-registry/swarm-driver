@@ -4,8 +4,8 @@ import (
 	"context"
 	"sync"
 
-	"github.com/ethersphere/bee/pkg/storage"
-	"github.com/ethersphere/bee/pkg/swarm"
+	"github.com/ethersphere/bee/v2/pkg/storage"
+	"github.com/ethersphere/bee/v2/pkg/swarm"
 )
 
 // SwarmInMemoryStore represents an in-memory key-value store for Swarm.

@@ -17,11 +17,11 @@ import (
 
 	storagedriver "github.com/distribution/distribution/v3/registry/storage/driver"
 	"github.com/distribution/distribution/v3/registry/storage/driver/factory"
-	beecrypto "github.com/ethersphere/bee/pkg/crypto"
-	"github.com/ethersphere/bee/pkg/file"
-	"github.com/ethersphere/bee/pkg/file/joiner"
-	"github.com/ethersphere/bee/pkg/file/splitter"
-	"github.com/ethersphere/bee/pkg/swarm"
+	beecrypto "github.com/ethersphere/bee/v2/pkg/crypto"
+	"github.com/ethersphere/bee/v2/pkg/file"
+	"github.com/ethersphere/bee/v2/pkg/file/joiner"
+	"github.com/ethersphere/bee/v2/pkg/file/splitter"
+	"github.com/ethersphere/bee/v2/pkg/swarm"
 
 	"github.com/uncloud-registry/swarm-driver/lookuper"
 	"github.com/uncloud-registry/swarm-driver/publisher"
@@ -273,7 +273,7 @@ func (d *swarmDriver) getMetadata(ctx context.Context, path string) (metaData, e
 		return metaData{}, fmt.Errorf("getMetadata: failed to get metadata for path %s %v", path, err)
 	}
 	// Create a joiner to read the metadata.
-	metaJoiner, _, err := joiner.New(ctx, d.store, metaRef)
+	metaJoiner, _, err := joiner.New(ctx, d.store, d.store, metaRef)
 	if err != nil {
 		return metaData{}, fmt.Errorf("getMetadata: failed to create reader for metadata: %v", err)
 	}
@@ -368,7 +368,7 @@ func (d *swarmDriver) getData(ctx context.Context, path string) ([]byte, error) 
 		return nil, fmt.Errorf("getData: failed to lookup data: %v", err)
 	}
 	// Create a joiner to read the data.
-	dataJoiner, _, err := joiner.New(ctx, d.store, dataRef)
+	dataJoiner, _, err := joiner.New(ctx, d.store, d.store, dataRef)
 	if err != nil {
 		return nil, fmt.Errorf("getData: failed to create joiner for data: %v", err)
 	}
@@ -549,7 +549,7 @@ func (d *swarmDriver) Reader(ctx context.Context, path string, offset int64) (io
 		return io.NopCloser(bytes.NewReader([]byte{})), nil
 	}
 	// Create a joiner to read the data
-	dataJoiner, _, err := joiner.New(ctx, d.store, dataRef)
+	dataJoiner, _, err := joiner.New(ctx, d.store, d.store, dataRef)
 	if err != nil {
 		logger.Error("Reader: Failed to create joiner", slog.String("path", path))
 		return nil, storagedriver.PathNotFoundError{Path: path, DriverName: d.Name()}
@@ -821,7 +821,7 @@ func (d *swarmDriver) Writer(ctx context.Context, path string, append bool) (sto
 			return w, nil
 		}
 		// Create a joiner to read the existing data
-		oldDataJoiner, _, err := joiner.New(ctx, d.store, oldDataRef)
+		oldDataJoiner, _, err := joiner.New(ctx, d.store, d.store, oldDataRef)
 		if err != nil {
 			logger.Error("Writer: Append: Failed to create joiner", slog.String("path", path), slog.String("error", err.Error()))
 			return nil, storagedriver.PathNotFoundError{Path: path, DriverName: d.Name()}

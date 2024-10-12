@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ethersphere/bee/pkg/storage"
-	"github.com/ethersphere/bee/pkg/swarm"
+	"github.com/ethersphere/bee/v2/pkg/storage"
+	"github.com/ethersphere/bee/v2/pkg/swarm"
 	"github.com/gorilla/websocket"
 )
 
@@ -162,7 +162,7 @@ func (b *BeeStore) Put(ctx context.Context, ch swarm.Chunk) (err error) {
 	if b.readOnly {
 		return errors.New("read-only mode")
 	}
-	
+
 	errc := make(chan error, 1)
 	select {
 	case <-ctx.Done():
