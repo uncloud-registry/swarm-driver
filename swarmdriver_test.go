@@ -6,8 +6,8 @@ import (
 
 	storagedriver "github.com/distribution/distribution/v3/registry/storage/driver"
 	"github.com/distribution/distribution/v3/registry/storage/driver/testsuites"
-	beecrypto "github.com/ethersphere/bee/pkg/crypto"
-	"github.com/ethersphere/bee/pkg/file/splitter"
+	beecrypto "github.com/ethersphere/bee/v2/pkg/crypto"
+	"github.com/ethersphere/bee/v2/pkg/file/splitter"
 	swarmdriver "github.com/uncloud-registry/swarm-driver"
 	"github.com/uncloud-registry/swarm-driver/lookuper"
 	"github.com/uncloud-registry/swarm-driver/publisher"
