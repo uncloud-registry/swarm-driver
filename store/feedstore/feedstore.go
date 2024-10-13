@@ -26,7 +26,7 @@ type FeedStore struct {
 }
 
 func NewFeedStore(host string, port int, tls, pin bool, batch, owner string) (*FeedStore, error) {
-	chunkGetter, err := beestore.NewBeeStore(host, port, tls, false, "", true)
+	chunkGetter, err := beestore.NewBeeStore(host, port, tls, "", true)
 	if err != nil {
 		return nil, fmt.Errorf("failed creating chunk getter %w", err)
 	}

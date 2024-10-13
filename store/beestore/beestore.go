@@ -28,12 +28,11 @@ type BeeStore struct {
 	cancel    context.CancelFunc
 	opChan    chan putOp
 	wg        sync.WaitGroup
-	pin       bool
 	readOnly  bool
 }
 
 // NewBeeStore creates a new APIStore.
-func NewBeeStore(host string, port int, tls, pin bool, batch string, readOnly bool) (*BeeStore, error) {
+func NewBeeStore(host string, port int, tls bool, batch string, readOnly bool) (*BeeStore, error) {
 	scheme := "http"
 	if tls {
 		scheme += "s"
@@ -57,7 +56,6 @@ func NewBeeStore(host string, port int, tls, pin bool, batch string, readOnly bo
 		batch:     batch,
 		cancel:    cancel,
 		opChan:    make(chan putOp),
-		pin:       pin,
 		readOnly:  readOnly,
 	}
 
@@ -80,9 +78,6 @@ func (b *BeeStore) putWorker(ctx context.Context) error {
 	reqHeader := http.Header{}
 	reqHeader.Set("Content-Type", "application/octet-stream")
 	reqHeader.Set("Swarm-Postage-Batch-Id", b.batch)
-	if b.pin {
-		reqHeader.Set("Swarm-Pin", "true")
-	}
 
 	dialer := websocket.Dialer{
 		ReadBufferSize:  swarm.ChunkSize,

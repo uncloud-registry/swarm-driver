@@ -114,7 +114,7 @@ func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[st
 	} else {
 		logger.Debug("Creating New Bee Swarm Driver")
 		// Create a new instance of BeeStore
-		store, err := beestore.NewBeeStore("localhost", 1633, false, false, "default", false)
+		store, err := beestore.NewBeeStore("localhost", 1633, false, "default", false)
 		if err != nil {
 			return nil, fmt.Errorf("Create: failed to create BeeStore: %v", err)
 		}

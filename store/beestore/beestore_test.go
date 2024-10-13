@@ -1,41 +1,44 @@
 package beestore_test
 
 import (
+	"bytes"
 	"context"
-	"crypto/ecdsa"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"testing"
 
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethersphere/bee/v2/pkg/api"
-	"github.com/ethersphere/bee/v2/pkg/crypto"
-	"github.com/ethersphere/bee/v2/pkg/log"
-	mockbatchstore "github.com/ethersphere/bee/v2/pkg/postage/batchstore/mock"
-	mockpost "github.com/ethersphere/bee/v2/pkg/postage/mock"
+	"github.com/ethersphere/bee/v2/pkg/cac"
 	postagetesting "github.com/ethersphere/bee/v2/pkg/postage/testing"
 	testingc "github.com/ethersphere/bee/v2/pkg/storage/testing"
-	mockstorer "github.com/ethersphere/bee/v2/pkg/storer/mock"
 	"github.com/ethersphere/bee/v2/pkg/swarm"
-	"github.com/ethersphere/bee/v2/pkg/tracing"
+	"github.com/gorilla/websocket"
 	"github.com/uncloud-registry/swarm-driver/store/beestore"
+	"github.com/uncloud-registry/swarm-driver/store/teststore"
 )
 
 func TestStoreCorrectness(t *testing.T) {
-	srvUrl := newTestServer(t, mockstorer.New())
+	tstore := teststore.NewSwarmInMemoryStore()
+	srvURLStr := newTestServer(t, tstore)
 
-	host := srvUrl.Hostname()
-	port, err := strconv.Atoi(srvUrl.Port())
+	srvURL, err := url.Parse(srvURLStr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	host := srvURL.Hostname()
+	port, err := strconv.Atoi(srvURL.Port())
 	if err != nil {
 		t.Fatal(err)
 	}
 	bId := swarm.NewAddress(postagetesting.MustNewID()).String()
 
 	t.Run("read-write", func(t *testing.T) {
-		st, err := beestore.NewBeeStore(host, port, false, false, bId, false)
+		st, err := beestore.NewBeeStore(host, port, false, bId, false)
 		if err != nil {
-			t.Fatal("failed creating new beestore")
+			t.Fatal("failed creating new beestore", err)
 		}
 
 		t.Cleanup(func() {
@@ -64,7 +67,7 @@ func TestStoreCorrectness(t *testing.T) {
 	})
 
 	t.Run("read-only", func(t *testing.T) {
-		st, err := beestore.NewBeeStore(host, port, false, false, bId, true)
+		st, err := beestore.NewBeeStore(host, port, false, bId, true)
 		if err != nil {
 			t.Fatal("failed creating new beestore")
 		}
@@ -85,42 +88,64 @@ func TestStoreCorrectness(t *testing.T) {
 }
 
 // newTestServer creates an http server to serve the bee http api endpoints.
-func newTestServer(t *testing.T, storer mockstorer.mockStorer) *url.URL {
+func newTestServer(t *testing.T, store *teststore.SwarmInMemoryStore) string {
 	t.Helper()
-	logger := log.NewLogger("test").Build()
-	// store := statestore.NewStateStore()
-	pk, _ := crypto.GenerateSecp256k1Key()
-	signer := crypto.NewDefaultSigner(pk)
-	batchStore := mockbatchstore.New(mockbatchstore.WithAcceptAllExistsFunc())
+	handler := http.NewServeMux()
 
-	var (
-		dummyKey   ecdsa.PublicKey
-		dummyOwner common.Address
-	)
+	handler.HandleFunc("/chunks/stream", func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{}
 
-	s := api.New(dummyKey, dummyKey, dummyOwner, logger, nil, batchStore, false, api.FullMode, true, true, nil)
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer conn.Close()
 
-	var extraOpts = api.ExtraOptions{
-		// Tags:   tags.NewTags(store, logger),
-		Storer: storer,
-		Post:   mockpost.New(mockpost.WithAcceptAll()),
-	}
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				break
+			}
 
-	noOpTracer, tracerCloser, _ := tracing.NewTracer(&tracing.Options{
-		Enabled: false,
+			if len(msg) < swarm.SpanSize {
+				conn.WriteMessage(websocket.TextMessage, []byte(err.Error()))
+				return
+			}
+
+			ch, err := cac.NewWithDataSpan(msg)
+			if err != nil {
+				conn.WriteMessage(websocket.TextMessage, []byte(err.Error()))
+				return
+			}
+
+			if err := store.Put(context.Background(), ch); err != nil {
+				conn.WriteMessage(websocket.TextMessage, []byte(err.Error()))
+				continue
+			}
+
+			conn.WriteMessage(websocket.BinaryMessage, []byte{})
+		}
 	})
 
-	t.Cleanup(func() { _ = tracerCloser.Close() })
+	handler.HandleFunc("/chunks/{address}", func(w http.ResponseWriter, r *http.Request) {
+		addrStr := r.PathValue("address")
+		addr, err := swarm.ParseHexAddress(addrStr)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		ch, err := store.Get(context.Background(), addr)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "binary/octet-stream")
+		w.Header().Set("Content-Length", strconv.FormatInt(int64(len(ch.Data())), 10))
+		_, _ = io.Copy(w, bytes.NewReader(ch.Data()))
+	})
 
-	_ = s.Configure(signer, noOpTracer, api.Options{}, extraOpts, 10, nil)
-
-	s.MountAPI()
-
-	ts := httptest.NewServer(s)
-	srvUrl, err := url.Parse(ts.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(ts.Close)
-	return srvUrl
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	return server.URL
 }

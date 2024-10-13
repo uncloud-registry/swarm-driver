@@ -1,36 +1,35 @@
 package feedstore_test
 
 import (
+	"bytes"
 	"context"
-	"crypto/ecdsa"
 	"encoding/hex"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"testing"
 
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethersphere/bee/v2/pkg/api"
-	"github.com/ethersphere/bee/v2/pkg/crypto"
-	"github.com/ethersphere/bee/v2/pkg/log"
-	mockbatchstore "github.com/ethersphere/bee/v2/pkg/postage/batchstore/mock"
-	mockpost "github.com/ethersphere/bee/v2/pkg/postage/mock"
+	"github.com/ethersphere/bee/v2/pkg/cac"
 	postagetesting "github.com/ethersphere/bee/v2/pkg/postage/testing"
+	"github.com/ethersphere/bee/v2/pkg/soc"
 	soctesting "github.com/ethersphere/bee/v2/pkg/soc/testing"
-	statestore "github.com/ethersphere/bee/v2/pkg/statestore/mock"
-	"github.com/ethersphere/bee/v2/pkg/storage"
 	testingc "github.com/ethersphere/bee/v2/pkg/storage/testing"
-	mockstorer "github.com/ethersphere/bee/v2/pkg/storer/mock"
 	"github.com/ethersphere/bee/v2/pkg/swarm"
-	"github.com/ethersphere/bee/v2/pkg/tracing"
 	"github.com/uncloud-registry/swarm-driver/store/feedstore"
+	"github.com/uncloud-registry/swarm-driver/store/teststore"
 )
 
 func TestStoreCorrectness(t *testing.T) {
-	srvUrl := newTestServer(t, mockstorer.New())
+	srvURLStr := newTestServer(t, teststore.NewSwarmInMemoryStore())
+	srvURL, err := url.Parse(srvURLStr)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	host := srvUrl.Hostname()
-	port, err := strconv.Atoi(srvUrl.Port())
+	host := srvURL.Hostname()
+	port, err := strconv.Atoi(srvURL.Port())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,43 +65,77 @@ func TestStoreCorrectness(t *testing.T) {
 
 }
 
-// newTestServer creates an http server to serve the bee http api endpoints.
-func newTestServer(t *testing.T, storer storage.Storer) *url.URL {
+func newTestServer(t *testing.T, store *teststore.SwarmInMemoryStore) string {
 	t.Helper()
-	logger := log.NewLogger("test").Build()
-	store := statestore.NewStateStore()
-	pk, _ := crypto.GenerateSecp256k1Key()
-	signer := crypto.NewDefaultSigner(pk)
-	batchStore := mockbatchstore.New(mockbatchstore.WithAcceptAllExistsFunc())
+	handler := http.NewServeMux()
 
-	var (
-		dummyKey   ecdsa.PublicKey
-		dummyOwner common.Address
-	)
-
-	s := api.New(dummyKey, dummyKey, dummyOwner, logger, nil, batchStore, false, api.FullMode, true, true, nil)
-
-	var extraOpts = api.ExtraOptions{
-		// Tags:   tags.NewTags(store, logger),
-		Storer: storer,
-		Post:   mockpost.New(mockpost.WithAcceptAll()),
-	}
-
-	noOpTracer, tracerCloser, _ := tracing.NewTracer(&tracing.Options{
-		Enabled: false,
+	handler.HandleFunc("/soc/{owner}/{id}", func(w http.ResponseWriter, r *http.Request) {
+		data, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		owner, err := hex.DecodeString(r.PathValue("owner"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		id, err := hex.DecodeString(r.PathValue("id"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		queryVals := r.URL.Query()
+		sig, err := hex.DecodeString(queryVals.Get("sig"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		ch, err := cac.NewWithDataSpan(data)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		ss, err := soc.NewSigned(id, ch, owner, sig)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		sch, err := ss.Chunk()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if !soc.Valid(sch) {
+			http.Error(w, "invalid soc", http.StatusBadRequest)
+			return
+		}
+		err = store.Put(context.Background(), sch)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
 	})
 
-	t.Cleanup(func() { _ = tracerCloser.Close() })
+	handler.HandleFunc("/chunks/{address}", func(w http.ResponseWriter, r *http.Request) {
+		addrStr := r.PathValue("address")
+		addr, err := swarm.ParseHexAddress(addrStr)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		ch, err := store.Get(context.Background(), addr)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "binary/octet-stream")
+		w.Header().Set("Content-Length", strconv.FormatInt(int64(len(ch.Data())), 10))
+		_, _ = io.Copy(w, bytes.NewReader(ch.Data()))
+	})
 
-	_ = s.Configure(signer, noOpTracer, api.Options{}, extraOpts, 10, nil)
-
-	s.MountAPI()
-
-	ts := httptest.NewServer(s)
-	srvUrl, err := url.Parse(ts.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(ts.Close)
-	return srvUrl
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	return server.URL
 }
