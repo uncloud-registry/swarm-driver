@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -80,8 +81,46 @@ type metaData struct {
 
 var _ storagedriver.StorageDriver = &swarmDriver{}
 
+func getSigner(privateKeyStr string) beecrypto.Signer {
+	privKeyBytes, _ := hex.DecodeString(privateKeyStr)
+	privateKey := beecrypto.Secp256k1PrivateKeyFromBytes(privKeyBytes)
+	signer := beecrypto.NewDefaultSigner(privateKey)
+	return signer
+}
+
+func getNewBatchID() (string, error) {
+	host := "localhost"
+	port := 1633
+	scheme := "http"
+	stampsURL := &url.URL{
+		Host:   fmt.Sprintf("%s:%d", host, port),
+		Scheme: scheme,
+		Path:   "stamps/10/17",
+	}
+	res, err := http.Post(stampsURL.String(), "application/json", nil)
+	if err != nil {
+		return "", fmt.Errorf("failed creating stamp %w", err)
+	}
+	resBody, err := io.ReadAll(res.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read stamp body %w", err)
+	}
+	val := make(map[string]interface{})
+	err = json.Unmarshal(resBody, &val)
+	if err != nil {
+		return "", fmt.Errorf("Error unmarshalling resbody for stamp %w", err)
+	}
+	batchID, ok := val["batchID"].(string)
+	if !ok {
+		return "", fmt.Errorf("Error converting val for stamp  %v", val["batchID"])
+	}
+	return batchID, nil
+}
+
 // Create initializes a new instance of the swarmDriver with the provided parameters.
 func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[string]interface{}) (storagedriver.StorageDriver, error) {
+	logger.Debug("Create Hit", slog.Any("parameters", parameters))
+
 	encrypt, ok := parameters["encrypt"].(bool)
 	if !ok {
 		return nil, fmt.Errorf("Create: missing or invalid 'encrypt' parameter")
@@ -94,10 +133,11 @@ func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[st
 	if !ok {
 		return nil, fmt.Errorf("Create: missing or invalid 'inmemory' parameter")
 	}
-	privKeyBytes, _ := hex.DecodeString(privateKeyStr)
-	privateKey := beecrypto.Secp256k1PrivateKeyFromBytes(privKeyBytes)
-	signer := beecrypto.NewDefaultSigner(privateKey)
-	ethAddress, _ := signer.EthereumAddress()
+	signer := getSigner(privateKeyStr)
+	ethAddress, err := signer.EthereumAddress()
+	if err != nil {
+		return nil, fmt.Errorf("Create: failed to get ethereum address: %v", err)
+	}
 	var lk Lookuper
 	var pb Publisher
 	var store store.PutGetter
@@ -113,15 +153,19 @@ func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[st
 		newSplitter = splitter.NewSimpleSplitter(store)
 	} else {
 		logger.Debug("Creating New Bee Swarm Driver")
-		// Create a new instance of BeeStore
-		store, err := beestore.NewBeeStore("localhost", 1633, false, "default", false)
+
+		owner := strings.TrimPrefix(ethAddress.String(), "0x")
+		batchID, err := getNewBatchID()
 		if err != nil {
-			return nil, fmt.Errorf("Create: failed to create BeeStore: %v", err)
+			return nil, fmt.Errorf("Create: failed to get new batchID: %v", err)
 		}
-		// Create a new instance of FeedStore
-		fstore, err := feedstore.NewFeedStore("localhost", 1634, false, false, "default", "default")
+		fstore, err := feedstore.NewFeedStore("localhost", 1633, false, true, batchID, owner)
 		if err != nil {
 			return nil, fmt.Errorf("Create: failed to create feedstore: %v", err)
+		}
+		store, err := beestore.NewBeeStore("localhost", 1633, false, batchID, false, true)
+		if err != nil {
+			return nil, fmt.Errorf("Create: failed to create BeeStore: %v", err)
 		}
 		lk = lookuper.New(fstore, ethAddress)
 		pb = publisher.New(fstore, signer, lookuper.Latest(fstore, ethAddress))
@@ -145,9 +189,9 @@ func New(lk Lookuper, pb Publisher, store store.PutGetter, splitter file.Splitte
 	}
 	// Add the root path to the driver.
 	if err := d.addPathToRoot(context.Background(), ""); err != nil {
-		logger.Error("New: Failed to create root path:")
+		logger.Error("New: Failed to create root path", "error", err)
 	}
-	logger.Debug("Swarm driver successfully created!")
+	logger.Debug("New: Swarm driver successfully created!")
 	return d
 }
 
