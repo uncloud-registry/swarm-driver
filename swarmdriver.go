@@ -153,33 +153,30 @@ func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[st
 		newSplitter = splitter.NewSimpleSplitter(store)
 	} else {
 		logger.Debug("Creating New Bee Swarm Driver")
-
 		owner := strings.TrimPrefix(ethAddress.String(), "0x")
 		batchID, err := getNewBatchID()
 		if err != nil {
 			return nil, fmt.Errorf("Create: failed to get new batchID: %v", err)
 		}
+		store, err = beestore.NewBeeStore("localhost", 1633, false, batchID, false, true)
+		if err != nil {
+			return nil, fmt.Errorf("Create: failed to create BeeStore: %v", err)
+		}
 		fstore, err := feedstore.NewFeedStore("localhost", 1633, false, true, batchID, owner)
 		if err != nil {
 			return nil, fmt.Errorf("Create: failed to create feedstore: %v", err)
-		}
-		store, err := beestore.NewBeeStore("localhost", 1633, false, batchID, false, true)
-		if err != nil {
-			return nil, fmt.Errorf("Create: failed to create BeeStore: %v", err)
 		}
 		lk = lookuper.New(fstore, ethAddress)
 		pb = publisher.New(fstore, signer, lookuper.Latest(fstore, ethAddress))
 		newSplitter = splitter.NewSimpleSplitter(store)
 	}
-
 	// Pass the signer to the New function instead of generating the key inside.
 	return New(lk, pb, store, newSplitter, encrypt), nil
 }
 
 // New constructs a new swarmDriver instance.
 func New(lk Lookuper, pb Publisher, store store.PutGetter, splitter file.Splitter, encrypt bool) *swarmDriver {
-	logger.Debug("Creating New Swarm Driver")
-
+	logger.Debug("Creating new Instance of swarm-driver")
 	d := &swarmDriver{
 		store:     store,
 		encrypt:   encrypt,

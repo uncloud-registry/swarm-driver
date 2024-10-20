@@ -35,6 +35,16 @@ type BeeStore struct {
 
 // NewBeeStore creates a new APIStore.
 func NewBeeStore(host string, port int, tls bool, batch string, readOnly bool, createTag bool) (*BeeStore, error) {
+	if host == "" {
+		return nil, errors.New("Beestore: NewBeeStore: host cannot be empty")
+	}
+	if port <= 0 {
+		return nil, errors.New("Beestore: NewBeeStore: invalid port number")
+	}
+	if batch == "" {
+		return nil, errors.New("Beestore: NewBeeStore: batch cannot be empty")
+	}
+
 	scheme := "http"
 	if tls {
 		scheme += "s"
@@ -60,6 +70,7 @@ func NewBeeStore(host string, port int, tls bool, batch string, readOnly bool, c
 		readOnly:  readOnly,
 		tag:       "",
 	}
+
 	if !readOnly {
 		if createTag {
 			tagUrl := &url.URL{
@@ -78,17 +89,17 @@ func NewBeeStore(host string, port int, tls bool, batch string, readOnly bool, c
 			val := make(map[string]interface{})
 			err = json.Unmarshal(resBody, &val)
 			if err != nil {
-				return nil, fmt.Errorf("Beestore: NewBeeStore: Error unmarshalling resbody %w", err)
+				return nil, fmt.Errorf("Beestore: NewBeeStore: error unmarshalling response body %w", err)
 			}
 			intVal, ok := val["uid"].(float64)
 			if !ok {
-				return nil, fmt.Errorf("Beestore: NewBeeStore: Error converting val  %v", val["uid"])
+				return nil, fmt.Errorf("Beestore: NewBeeStore: error converting uid value %v", val["uid"])
 			}
 			b.tag = fmt.Sprintf("%d", int(intVal))
 		}
 		err := b.putWorker(ctx)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("Beestore: NewBeeStore: failed to start putWorker %w", err)
 		}
 	}
 	return b, nil
@@ -121,7 +132,6 @@ func (b *BeeStore) putWorker(ctx context.Context) error {
 		close(serverClosed)
 		return nil
 	})
-
 	b.wg.Add(1)
 	go func() {
 		defer conn.Close()

@@ -32,9 +32,7 @@ func TestStoreCorrectness(t *testing.T) {
 		return
 	}
 	fmt.Println("Beestore: ", bstore)
-	// tstore := teststore.NewSwarmInMemoryStore()
 	srvURLStr := newTestServer(t, bstore)
-
 	srvURL, err := url.Parse(srvURLStr)
 	if err != nil {
 		t.Fatal(err)
