@@ -88,9 +88,7 @@ func getSigner(privateKeyStr string) beecrypto.Signer {
 	return signer
 }
 
-func getNewBatchID() (string, error) {
-	host := "localhost"
-	port := 1633
+func getNewBatchID(host string, port int) (string, error) {
 	scheme := "http"
 	stampsURL := &url.URL{
 		Host:   fmt.Sprintf("%s:%d", host, port),
@@ -133,6 +131,14 @@ func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[st
 	if !ok {
 		return nil, fmt.Errorf("Create: missing or invalid 'inmemory' parameter")
 	}
+	host, ok := parameters["host"].(string)
+	if !ok {
+		return nil, fmt.Errorf("Create: missing or invalid 'host' parameter")
+	}
+	port, ok := parameters["port"].(int)
+	if !ok {
+		return nil, fmt.Errorf("Create: missing or invalid 'port' parameter")
+	}
 	signer := getSigner(privateKeyStr)
 	ethAddress, err := signer.EthereumAddress()
 	if err != nil {
@@ -154,15 +160,15 @@ func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[st
 	} else {
 		logger.Debug("Creating New Bee Swarm Driver")
 		owner := strings.TrimPrefix(ethAddress.String(), "0x")
-		batchID, err := getNewBatchID()
+		batchID, err := getNewBatchID(host, port)
 		if err != nil {
 			return nil, fmt.Errorf("Create: failed to get new batchID: %v", err)
 		}
-		store, err = beestore.NewBeeStore("localhost", 1633, false, batchID, false, true)
+		store, err = beestore.NewBeeStore(host, port, false, batchID, false, true)
 		if err != nil {
 			return nil, fmt.Errorf("Create: failed to create BeeStore: %v", err)
 		}
-		fstore, err := feedstore.NewFeedStore("localhost", 1633, false, true, batchID, owner)
+		fstore, err := feedstore.NewFeedStore(host, port, false, true, batchID, owner)
 		if err != nil {
 			return nil, fmt.Errorf("Create: failed to create feedstore: %v", err)
 		}
