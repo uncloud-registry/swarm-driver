@@ -3,8 +3,6 @@ package beestore_test
 import (
 	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -18,21 +16,13 @@ import (
 	"github.com/ethersphere/bee/v2/pkg/swarm"
 	"github.com/gorilla/websocket"
 	"github.com/uncloud-registry/swarm-driver/store/beestore"
+	"github.com/uncloud-registry/swarm-driver/store/teststore"
 )
 
 func TestStoreCorrectness(t *testing.T) {
+	tstore := teststore.NewSwarmInMemoryStore()
+	srvURLStr := newTestServer(t, tstore)
 
-	batchID, err := getNewTestBatchID()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	bstore, err := beestore.NewBeeStore("localhost", 1633, false, batchID, false, true)
-	if err != nil {
-		return
-	}
-	fmt.Println("Beestore: ", bstore)
-	srvURLStr := newTestServer(t, bstore)
 	srvURL, err := url.Parse(srvURLStr)
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +88,7 @@ func TestStoreCorrectness(t *testing.T) {
 }
 
 // newTestServer creates an http server to serve the bee http api endpoints.
-func newTestServer(t *testing.T, store *beestore.BeeStore) string {
+func newTestServer(t *testing.T, store *teststore.SwarmInMemoryStore) string {
 	t.Helper()
 	handler := http.NewServeMux()
 
@@ -158,36 +148,4 @@ func newTestServer(t *testing.T, store *beestore.BeeStore) string {
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 	return server.URL
-}
-
-func getNewTestBatchID() (string, error) {
-	host := "localhost"
-	port := 1633
-	scheme := "http"
-	stampsURL := &url.URL{
-		Host:   fmt.Sprintf("%s:%d", host, port),
-		Scheme: scheme,
-		Path:   "stamps/10/17",
-	}
-	res, err := http.Post(stampsURL.String(), "application/json", nil)
-	if err != nil {
-		return "", fmt.Errorf("failed creating stamp %w", err)
-	}
-	resBody, err := io.ReadAll(res.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read stamp body %w", err)
-	}
-	fmt.Println("Stamp Created: ", string(resBody))
-
-	val := make(map[string]interface{})
-	err = json.Unmarshal(resBody, &val)
-	if err != nil {
-		return "", fmt.Errorf("Error unmarshalling resbody for stamp %w", err)
-	}
-	batchID, ok := val["batchID"].(string)
-	if !ok {
-		return "", fmt.Errorf("Error converting val for stamp  %v", val["batchID"])
-	}
-
-	return batchID, nil
 }
