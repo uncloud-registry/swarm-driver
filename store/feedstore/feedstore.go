@@ -26,9 +26,9 @@ type FeedStore struct {
 }
 
 func NewFeedStore(host string, port int, tls, pin bool, batch, owner string) (*FeedStore, error) {
-	chunkGetter, err := beestore.NewBeeStore(host, port, tls, "", true)
+	chunkGetter, err := beestore.NewBeeStore(host, port, tls, batch, true, false)
 	if err != nil {
-		return nil, fmt.Errorf("failed creating chunk getter %w", err)
+		return nil, fmt.Errorf("FeedStore: NewFeedStore: failed creating chunk getter %w", err)
 	}
 	scheme := "http"
 	if tls {
@@ -39,7 +39,6 @@ func NewFeedStore(host string, port int, tls, pin bool, batch, owner string) (*F
 		Scheme: scheme,
 		Path:   "soc",
 	}
-
 	return &FeedStore{
 		Client:  http.DefaultClient,
 		getter:  chunkGetter,
@@ -57,7 +56,7 @@ func (f *FeedStore) Get(ctx context.Context, address swarm.Address) (swarm.Chunk
 func (f *FeedStore) Put(ctx context.Context, ch swarm.Chunk) (err error) {
 
 	if !soc.Valid(ch) {
-		return errors.New("chunk not a single owner chunk")
+		return errors.New("FeedStore: Put: chunk not a single owner chunk")
 	}
 	err = f.putSOCChunk(ctx, ch)
 	if err != nil {
@@ -74,42 +73,33 @@ func (f *FeedStore) Close() error {
 func (f *FeedStore) putSOCChunk(ctx context.Context, ch swarm.Chunk) error {
 	chunkData := ch.Data()
 	cursor := 0
-
 	id := hex.EncodeToString(chunkData[cursor:swarm.HashSize])
 	cursor += swarm.HashSize
-
 	signature := hex.EncodeToString(chunkData[cursor : cursor+swarm.SocSignatureSize])
 	cursor += swarm.SocSignatureSize
-
 	chData := chunkData[cursor:]
-
 	qURL, err := url.Parse(strings.Join([]string{f.baseUrl, f.owner, id}, "/"))
 	if err != nil {
-		return fmt.Errorf("failed parsing URL %w", err)
+		return fmt.Errorf("FeedStore: putSOCChunk: failed parsing URL %w", err)
 	}
-
 	q := qURL.Query()
 	q.Set("sig", signature)
 	qURL.RawQuery = q.Encode()
-
 	req, err := http.NewRequestWithContext(ctx, "POST", qURL.String(), bytes.NewBuffer(chData))
 	if err != nil {
-		return fmt.Errorf("failed creating HTTP req %w", err)
+		return fmt.Errorf("FeedStore: putSOCChunk: failed creating HTTP req %w", err)
 	}
 	req.Header.Set("Swarm-Postage-Batch-Id", f.batch)
 	if f.pin {
 		req.Header.Set("Swarm-Pin", "true")
 	}
-
 	resp, err := f.Client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed executing HTTP req %w", err)
+		return fmt.Errorf("FeedStore: putSOCChunk: failed executing HTTP req %w", err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusCreated {
-		return fmt.Errorf("invalid status code from response %d", resp.StatusCode)
+		return fmt.Errorf("FeedStore: putSOCChunk: invalid status code from response %d", resp.StatusCode)
 	}
-
 	return nil
 }
