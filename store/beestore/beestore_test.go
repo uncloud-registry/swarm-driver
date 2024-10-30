@@ -36,7 +36,7 @@ func TestStoreCorrectness(t *testing.T) {
 	bId := swarm.NewAddress(postagetesting.MustNewID()).String()
 
 	t.Run("read-write", func(t *testing.T) {
-		st, err := beestore.NewBeeStore(host, port, false, bId, false, true)
+		st, err := beestore.NewBeeStore(host, port, false, bId, false, false)
 		if err != nil {
 			t.Fatal("failed creating new beestore", err)
 		}
