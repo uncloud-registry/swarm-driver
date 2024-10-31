@@ -112,7 +112,38 @@ func getNewBatchID(host string, port int) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("Error converting val for stamp  %v", val["batchID"])
 	}
+	stampSyncStatus(host, port)
+
 	return batchID, nil
+}
+
+func stampSyncStatus(host string, port int) {
+	stampsURL := &url.URL{
+		Host:   fmt.Sprintf("%s:%d", host, port),
+		Scheme: "http",
+		Path:   "stamps",
+	}
+	for {
+		resp, err := http.Get(stampsURL.String())
+		if err != nil {
+			logger.Debug("stampSyncValidity: Request failed:", "error", err)
+			time.Sleep(10 * time.Second)
+			continue
+		}
+		defer resp.Body.Close()
+
+		var data map[string]interface{}
+		body, _ := io.ReadAll(resp.Body)
+		json.Unmarshal(body, &data)
+
+		if code, ok := data["code"].(float64); ok && code == 503 {
+			logger.Debug("Stamp sync in progress....")
+			time.Sleep(10 * time.Second)
+		} else {
+			logger.Debug("Stamps synced successfully")
+			break
+		}
+	}
 }
 
 // Create initializes a new instance of the swarmDriver with the provided parameters.
@@ -139,6 +170,10 @@ func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[st
 	if !ok {
 		return nil, fmt.Errorf("Create: missing or invalid 'port' parameter")
 	}
+	batchID, ok := parameters["batchID"].(string)
+	if !ok {
+		return nil, fmt.Errorf("Create: missing or invalid 'batchID' parameter")
+	}
 	signer := getSigner(privateKeyStr)
 	ethAddress, err := signer.EthereumAddress()
 	if err != nil {
@@ -160,9 +195,11 @@ func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[st
 	} else {
 		logger.Debug("Creating New Bee Swarm Driver")
 		owner := strings.TrimPrefix(ethAddress.String(), "0x")
-		batchID, err := getNewBatchID(host, port)
-		if err != nil {
-			return nil, fmt.Errorf("Create: failed to get new batchID: %v", err)
+		if batchID == "" {
+			batchID, err = getNewBatchID(host, port)
+			if err != nil {
+				return nil, fmt.Errorf("Create: failed to get new batchID: %v", err)
+			}
 		}
 		store, err = beestore.NewBeeStore(host, port, false, batchID, false, true)
 		if err != nil {
