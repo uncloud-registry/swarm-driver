@@ -24,10 +24,12 @@ import (
 	"github.com/ethersphere/bee/v2/pkg/file/splitter"
 	"github.com/ethersphere/bee/v2/pkg/swarm"
 
+	"github.com/uncloud-registry/swarm-driver/cached"
 	"github.com/uncloud-registry/swarm-driver/lookuper"
 	"github.com/uncloud-registry/swarm-driver/publisher"
 	"github.com/uncloud-registry/swarm-driver/store"
 	"github.com/uncloud-registry/swarm-driver/store/beestore"
+	"github.com/uncloud-registry/swarm-driver/store/cachedstore"
 	"github.com/uncloud-registry/swarm-driver/store/feedstore"
 	"github.com/uncloud-registry/swarm-driver/store/teststore"
 )
@@ -112,6 +114,7 @@ func getNewBatchID(host string, port int) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("Error converting val for stamp  %v", val["batchID"])
 	}
+
 	return batchID, nil
 }
 
@@ -139,6 +142,10 @@ func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[st
 	if !ok {
 		return nil, fmt.Errorf("Create: missing or invalid 'port' parameter")
 	}
+	batchID, ok := parameters["batchID"].(string)
+	if !ok {
+		return nil, fmt.Errorf("Create: missing or invalid 'batchID' parameter")
+	}
 	signer := getSigner(privateKeyStr)
 	ethAddress, err := signer.EthereumAddress()
 	if err != nil {
@@ -160,20 +167,34 @@ func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[st
 	} else {
 		logger.Debug("Creating New Bee Swarm Driver")
 		owner := strings.TrimPrefix(ethAddress.String(), "0x")
-		batchID, err := getNewBatchID(host, port)
-		if err != nil {
-			return nil, fmt.Errorf("Create: failed to get new batchID: %v", err)
+		if batchID == "" {
+			batchID, err = getNewBatchID(host, port)
+			if err != nil {
+				return nil, fmt.Errorf("Create: failed to get new batchID: %v", err)
+			}
 		}
-		store, err = beestore.NewBeeStore(host, port, false, batchID, false, true)
+		bstore, err := beestore.NewBeeStore(host, port, false, batchID, false, true)
 		if err != nil {
 			return nil, fmt.Errorf("Create: failed to create BeeStore: %v", err)
+		}
+		store, err = cachedstore.New(bstore)
+		if err != nil {
+			return nil, fmt.Errorf("Create: failed to create cachedstore: %v", err)
 		}
 		fstore, err := feedstore.NewFeedStore(host, port, false, true, batchID, owner)
 		if err != nil {
 			return nil, fmt.Errorf("Create: failed to create feedstore: %v", err)
 		}
-		lk = lookuper.New(fstore, ethAddress)
-		pb = publisher.New(fstore, signer, lookuper.Latest(fstore, ethAddress))
+		clp, err := cached.New(
+			lookuper.New(fstore, ethAddress),
+			publisher.New(fstore, signer, lookuper.Latest(fstore, ethAddress)),
+			3*time.Second,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("Create: failed to create cached lookuper publisher: %v", err)
+		}
+		lk = clp
+		pb = clp
 		newSplitter = splitter.NewSimpleSplitter(store)
 	}
 	// Pass the signer to the New function instead of generating the key inside.
