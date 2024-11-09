@@ -193,12 +193,55 @@ func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[st
 		if err != nil {
 			return nil, fmt.Errorf("Create: failed to create cached lookuper publisher: %v", err)
 		}
+		cache := initCache(ctx, clp, store)
+		fmt.Println(cache)
+		clp.Init = false
 		lk = clp
 		pb = clp
 		newSplitter = splitter.NewSimpleSplitter(store)
 	}
 	// Pass the signer to the New function instead of generating the key inside.
 	return New(lk, pb, store, newSplitter, encrypt), nil
+}
+
+func initCache(ctx context.Context, lookuper Lookuper, store store.PutGetter) map[string]metaData {
+	// Initialize a queue for BFS and a map to store the metadata for each path
+	logger.Debug("initCache Hit")
+	queue := []string{"/"}
+	cache := make(map[string]metaData)
+	// Process each path in the queue
+	for len(queue) > 0 {
+		// Get the first path from the queue
+		parentPath := queue[0]
+		queue = queue[1:]
+		// Normalize the path
+		parentPath = filepath.ToSlash(parentPath)
+		// Retrieve metadata reference for the current path
+		metaRef, err := lookuper.Get(ctx, filepath.Join(parentPath, "mtdt"), time.Now().Unix())
+		if err != nil {
+			logger.Warn("initCache: failed to get metadata for path", slog.String("path", parentPath), slog.String("error", err.Error()))
+			continue
+		}
+		// Create a joiner to read the metadata
+		metaJoiner, _, err := joiner.New(ctx, store, store, metaRef)
+		if err != nil {
+			logger.Warn("initCache: failed to create reader for metadata", slog.String("path", parentPath), slog.String("error", err.Error()))
+			continue
+		}
+		// Read and unmarshal the metadata
+		meta, err := fromMetadata(metaJoiner)
+		if err != nil {
+			logger.Warn("initCache: failed to read metadata", slog.String("path", parentPath), slog.String("error", err.Error()))
+			continue
+		}
+		// Store metadata in the cache map with the path as the key
+		cache[parentPath] = meta
+		// Extend the queue with child paths
+		for _, child := range meta.Children {
+			queue = append(queue, filepath.Join(parentPath, child))
+		}
+	}
+	return cache
 }
 
 // New constructs a new swarmDriver instance.
@@ -211,9 +254,14 @@ func New(lk Lookuper, pb Publisher, store store.PutGetter, splitter file.Splitte
 		publisher: pb,
 		splitter:  splitter,
 	}
-	// Add the root path to the driver.
-	if err := d.addPathToRoot(context.Background(), ""); err != nil {
-		logger.Error("New: Failed to create root path", "error", err)
+	// // Add the root path to the driver.
+
+	pathsToAdd := []string{"/", "/docker/registry/v2/blobs/sha256", "/docker/registry/v2/repositories"}
+	for _, path := range pathsToAdd {
+		if err := d.addPathToRoot(context.Background(), path); err != nil {
+			logger.Error("New: Failed to create root path", "error", err)
+		}
+		logger.Debug("New: Successfully created root path", slog.String("path", path))
 	}
 	logger.Debug("New: Swarm driver successfully created!")
 	return d
