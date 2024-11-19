@@ -194,6 +194,8 @@ func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[st
 		if err != nil {
 			return nil, fmt.Errorf("Create: failed to create cached lookuper publisher: %v", err)
 		}
+		initCache(ctx, clp, store)
+		clp.SetTimeout(3 * time.Second)
 		lk = clp
 		pb = clp
 		newSplitter = splitter.NewSimpleSplitter(store)
@@ -203,13 +205,12 @@ func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[st
 }
 
 var rootPaths = []string{"/", "/docker/registry/v2/blobs/sha256", "/docker/registry/v2/repositories"}
+var foundRootPaths = make(map[string]bool)
 
 // initCache initializes the cache and marks whether any of the rootPaths were found.
-func initCache(ctx context.Context, lookuper Lookuper, store store.PutGetter) map[string]bool {
+func initCache(ctx context.Context, lookuper Lookuper, store store.PutGetter) {
 	logger.Debug("initCache Hit")
 	queue := []string{"/"}
-
-	foundRootPaths := make(map[string]bool)
 
 	// Initialize foundPaths map with rootPaths set to false
 	for _, path := range rootPaths {
@@ -254,7 +255,7 @@ func initCache(ctx context.Context, lookuper Lookuper, store store.PutGetter) ma
 		}
 	}
 
-	return foundRootPaths
+	return
 }
 
 // New constructs a new swarmDriver instance.
@@ -269,11 +270,7 @@ func New(lk Lookuper, pb Publisher, store store.PutGetter, splitter file.Splitte
 		splitter:  splitter,
 	}
 
-	ctx := context.Background()
-	foundRootPaths := initCache(ctx, d.lookuper, d.store)
-
 	// // Add the root path to the driver.
-
 	for path, val := range foundRootPaths {
 		if !val {
 			if err := d.addPathToRoot(context.Background(), path); err != nil {
