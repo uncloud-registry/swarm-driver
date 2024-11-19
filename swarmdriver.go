@@ -18,6 +18,7 @@ import (
 
 	storagedriver "github.com/distribution/distribution/v3/registry/storage/driver"
 	"github.com/distribution/distribution/v3/registry/storage/driver/factory"
+	"github.com/ethereum/go-ethereum/log"
 	beecrypto "github.com/ethersphere/bee/v2/pkg/crypto"
 	"github.com/ethersphere/bee/v2/pkg/file"
 	"github.com/ethersphere/bee/v2/pkg/file/joiner"
@@ -188,14 +189,11 @@ func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[st
 		clp, err := cached.New(
 			lookuper.New(fstore, ethAddress),
 			publisher.New(fstore, signer, lookuper.Latest(fstore, ethAddress)),
-			3*time.Second,
+			120*time.Second,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("Create: failed to create cached lookuper publisher: %v", err)
 		}
-		cache := initCache(ctx, clp, store)
-		fmt.Println(cache)
-		clp.Init = false
 		lk = clp
 		pb = clp
 		newSplitter = splitter.NewSimpleSplitter(store)
@@ -204,49 +202,65 @@ func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[st
 	return New(lk, pb, store, newSplitter, encrypt), nil
 }
 
-func initCache(ctx context.Context, lookuper Lookuper, store store.PutGetter) map[string]metaData {
-	// Initialize a queue for BFS and a map to store the metadata for each path
+var rootPaths = []string{"/", "/docker/registry/v2/blobs/sha256", "/docker/registry/v2/repositories"}
+
+// initCache initializes the cache and marks whether any of the rootPaths were found.
+func initCache(ctx context.Context, lookuper Lookuper, store store.PutGetter) map[string]bool {
 	logger.Debug("initCache Hit")
 	queue := []string{"/"}
-	cache := make(map[string]metaData)
+
+	foundRootPaths := make(map[string]bool)
+
+	// Initialize foundPaths map with rootPaths set to false
+	for _, path := range rootPaths {
+		foundRootPaths[path] = false
+	}
+	log.Debug("initCache: Found root paths", slog.Any("rootPaths", foundRootPaths))
 	// Process each path in the queue
 	for len(queue) > 0 {
-		// Get the first path from the queue
 		parentPath := queue[0]
 		queue = queue[1:]
-		// Normalize the path
 		parentPath = filepath.ToSlash(parentPath)
+		logger.Debug("initCache: Processing path", slog.String("path", parentPath))
 		// Retrieve metadata reference for the current path
 		metaRef, err := lookuper.Get(ctx, filepath.Join(parentPath, "mtdt"), time.Now().Unix())
 		if err != nil {
 			logger.Warn("initCache: failed to get metadata for path", slog.String("path", parentPath), slog.String("error", err.Error()))
 			continue
 		}
+
 		// Create a joiner to read the metadata
 		metaJoiner, _, err := joiner.New(ctx, store, store, metaRef)
 		if err != nil {
 			logger.Warn("initCache: failed to create reader for metadata", slog.String("path", parentPath), slog.String("error", err.Error()))
 			continue
 		}
+
 		// Read and unmarshal the metadata
 		meta, err := fromMetadata(metaJoiner)
 		if err != nil {
 			logger.Warn("initCache: failed to read metadata", slog.String("path", parentPath), slog.String("error", err.Error()))
 			continue
 		}
-		// Store metadata in the cache map with the path as the key
-		cache[parentPath] = meta
+
+		// Mark the path as found if it's in rootPaths
+		if _, exists := foundRootPaths[parentPath]; exists {
+			foundRootPaths[parentPath] = true
+		}
+
 		// Extend the queue with child paths
 		for _, child := range meta.Children {
 			queue = append(queue, filepath.Join(parentPath, child))
 		}
 	}
-	return cache
+
+	return foundRootPaths
 }
 
 // New constructs a new swarmDriver instance.
 func New(lk Lookuper, pb Publisher, store store.PutGetter, splitter file.Splitter, encrypt bool) *swarmDriver {
 	logger.Debug("Creating new Instance of swarm-driver")
+
 	d := &swarmDriver{
 		store:     store,
 		encrypt:   encrypt,
@@ -254,14 +268,20 @@ func New(lk Lookuper, pb Publisher, store store.PutGetter, splitter file.Splitte
 		publisher: pb,
 		splitter:  splitter,
 	}
+
+	ctx := context.Background()
+	foundRootPaths := initCache(ctx, d.lookuper, d.store)
+
 	// // Add the root path to the driver.
 
-	pathsToAdd := []string{"/", "/docker/registry/v2/blobs/sha256", "/docker/registry/v2/repositories"}
-	for _, path := range pathsToAdd {
-		if err := d.addPathToRoot(context.Background(), path); err != nil {
-			logger.Error("New: Failed to create root path", "error", err)
+	for path, val := range foundRootPaths {
+		if !val {
+			if err := d.addPathToRoot(context.Background(), path); err != nil {
+				logger.Error("New: Failed to create root path", "error", err)
+			} else {
+				logger.Debug("New: Successfully created root path", slog.String("path", path))
+			}
 		}
-		logger.Debug("New: Successfully created root path", slog.String("path", path))
 	}
 	logger.Debug("New: Swarm driver successfully created!")
 	return d
@@ -419,7 +439,7 @@ func (d *swarmDriver) putMetadata(ctx context.Context, path string, meta metaDat
 		return fmt.Errorf("putMetadata: failed to publish metadata: %v", err)
 	}
 	// If the path is the root, no need to update parent directories
-	if path == "/" {
+	if contains(rootPaths, path) {
 		return nil
 	}
 	// Update metadata for each parent directory up to the root
@@ -466,7 +486,7 @@ func (d *swarmDriver) putMetadata(ctx context.Context, path string, meta metaDat
 			}
 		}
 		// Break the loop if we have reached the root
-		if currentPath == "/" {
+		if contains(rootPaths, currentPath) {
 			break
 		}
 		// Move up to the parent directory
@@ -474,6 +494,15 @@ func (d *swarmDriver) putMetadata(ctx context.Context, path string, meta metaDat
 	}
 	logger.Debug("putMetadata: Success!", slog.String("path", path))
 	return nil
+}
+
+func contains(slice []string, element string) bool {
+	for _, el := range slice {
+		if el == element {
+			return true
+		}
+	}
+	return false
 }
 
 // getData retrieves the data stored at the given path as a byte slice.

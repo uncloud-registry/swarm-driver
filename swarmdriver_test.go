@@ -19,6 +19,7 @@ import (
 	beecrypto "github.com/ethersphere/bee/v2/pkg/crypto"
 	"github.com/ethersphere/bee/v2/pkg/file/splitter"
 	swarmdriver "github.com/uncloud-registry/swarm-driver"
+	"github.com/uncloud-registry/swarm-driver/cached"
 	"github.com/uncloud-registry/swarm-driver/lookuper"
 	"github.com/uncloud-registry/swarm-driver/publisher"
 	"github.com/uncloud-registry/swarm-driver/store/beestore"
@@ -51,11 +52,18 @@ func newSwarmDriverInMemoryConstructor() (storagedriver.StorageDriver, error) {
 
 	store := teststore.NewSwarmInMemoryStore()
 
-	lk := lookuper.New(store, ethAddress)
-	pb := publisher.New(store, signer, lookuper.Latest(store, ethAddress))
+	clp, err := cached.New(
+		lookuper.New(store, ethAddress),
+		publisher.New(store, signer, lookuper.Latest(store, ethAddress)),
+		120*time.Second,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("Create: failed to create cached lookuper publisher: %v", err)
+	}
+
 	newSplitter := splitter.NewSimpleSplitter(store)
 
-	return swarmdriver.New(lk, pb, store, newSplitter, encrypt), nil
+	return swarmdriver.New(clp, clp, store, newSplitter, encrypt), nil
 }
 
 func TestInMemorySwarmDriverSuite(t *testing.T) {

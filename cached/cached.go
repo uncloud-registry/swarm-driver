@@ -2,7 +2,6 @@ package cached
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -19,7 +18,6 @@ type cachedLookuperPublisher struct {
 	timeout time.Duration
 	cached  *lru.Cache[string, cachedResult]
 	mtx     sync.RWMutex
-	Init    bool
 }
 
 type cachedResult struct {
@@ -38,7 +36,6 @@ func New(lk lookuper.Lookuper, pb publisher.Publisher, timeout time.Duration) (*
 		Publisher: pb,
 		timeout:   timeout,
 		cached:    cache,
-		Init:      true,
 	}, nil
 }
 
@@ -70,12 +67,7 @@ func (c *cachedLookuperPublisher) Get(ctx context.Context, id string, version in
 }
 
 func (c *cachedLookuperPublisher) get(ctx context.Context, id string, version int64) (swarm.Address, error) {
-	timeout := c.timeout
-	if c.Init {
-		timeout = 120 * time.Second
-	}
-	fmt.Println("timeout:", timeout)
-	cctx, cancel := context.WithTimeout(ctx, timeout)
+	cctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
 	return c.Lookuper.Get(cctx, id, version)
@@ -90,4 +82,9 @@ func (c *cachedLookuperPublisher) Put(ctx context.Context, id string, version in
 		// log.Debugf("adding to cache id %s ref %s", id, ref.String())
 	}
 	return err
+}
+
+func (c *cachedLookuperPublisher) SetTimeout(timeout time.Duration) {
+	c.timeout = timeout
+	return
 }
