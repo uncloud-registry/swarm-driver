@@ -34,7 +34,6 @@ func (c *cachedStore) Get(ctx context.Context, address swarm.Address) (ch swarm.
 			c.mtx.Lock()
 			_ = c.cache.Add(address.ByteString(), ch)
 			c.mtx.Unlock()
-			// log.Debugf("adding chunk to cache %s", ch.Address().String())
 		}
 	}
 	return
