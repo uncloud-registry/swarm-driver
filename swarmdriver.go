@@ -18,7 +18,6 @@ import (
 
 	storagedriver "github.com/distribution/distribution/v3/registry/storage/driver"
 	"github.com/distribution/distribution/v3/registry/storage/driver/factory"
-	"github.com/ethereum/go-ethereum/log"
 	beecrypto "github.com/ethersphere/bee/v2/pkg/crypto"
 	"github.com/ethersphere/bee/v2/pkg/file"
 	"github.com/ethersphere/bee/v2/pkg/file/joiner"
@@ -194,29 +193,25 @@ func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[st
 		if err != nil {
 			return nil, fmt.Errorf("Create: failed to create cached lookuper publisher: %v", err)
 		}
-		initCache(ctx, clp, store)
+		newSplitter = splitter.NewSimpleSplitter(store)
+		err = initCache(ctx, clp, clp, store, newSplitter)
+		if err != nil {
+			return nil, fmt.Errorf("Create: failed to initialize cache: %v", err)
+		}
 		clp.SetTimeout(3 * time.Second)
 		lk = clp
 		pb = clp
-		newSplitter = splitter.NewSimpleSplitter(store)
+
 	}
 	// Pass the signer to the New function instead of generating the key inside.
 	return New(lk, pb, store, newSplitter, encrypt), nil
 }
 
-var rootPaths = []string{"/", "/docker/registry/v2/blobs/sha256", "/docker/registry/v2/repositories"}
-var foundRootPaths = make(map[string]bool)
-
 // initCache initializes the cache and marks whether any of the rootPaths were found.
-func initCache(ctx context.Context, lookuper Lookuper, store store.PutGetter) {
+func initCache(ctx context.Context, lk lookuper.Lookuper, pb publisher.Publisher, store store.PutGetter, splitter file.Splitter) error {
 	logger.Debug("initCache Hit")
 	queue := []string{"/"}
 
-	// Initialize foundPaths map with rootPaths set to false
-	for _, path := range rootPaths {
-		foundRootPaths[path] = false
-	}
-	log.Debug("initCache: Found root paths", slog.Any("rootPaths", foundRootPaths))
 	// Process each path in the queue
 	for len(queue) > 0 {
 		parentPath := queue[0]
@@ -224,61 +219,66 @@ func initCache(ctx context.Context, lookuper Lookuper, store store.PutGetter) {
 		parentPath = filepath.ToSlash(parentPath)
 		logger.Debug("initCache: Processing path", slog.String("path", parentPath))
 		// Retrieve metadata reference for the current path
-		metaRef, err := lookuper.Get(ctx, filepath.Join(parentPath, "mtdt"), time.Now().Unix())
+		metaRef, err := lk.Get(ctx, filepath.Join(parentPath, "mtdt"), time.Now().Unix())
 		if err != nil {
-			logger.Warn("initCache: failed to get metadata for path", slog.String("path", parentPath), slog.String("error", err.Error()))
+			if parentPath == "/" {
+				logger.Warn("initCache: root path does not exist.", slog.String("error", err.Error()))
+				rootMeta := metaData{
+					IsDir:    true,
+					Path:     "/",
+					ModTime:  time.Now().Unix(),
+					Children: []string{},
+				}
+				metaBuf, err := json.Marshal(rootMeta)
+				if err != nil {
+					logger.Error("initCache: failed to marshal root metadata", slog.String("error", err.Error()))
+					return err
+				}
+				metaRef, err = splitter.Split(ctx, io.NopCloser(bytes.NewReader(metaBuf)), int64(len(metaBuf)), false)
+				if err != nil || isZeroAddress(metaRef) {
+					logger.Error("initCache: failed to split root metadata", slog.String("error", err.Error()))
+					return err
+				}
+				err = pb.Put(ctx, filepath.Join(parentPath, "mtdt"), time.Now().Unix(), metaRef)
+				if err != nil {
+					logger.Error("initCache: failed to publish root metadata", slog.String("error", err.Error()))
+					return err
+				}
+				logger.Debug("initCache: root metadata published")
+				return nil
+			}
+			logger.Error("initCache: failed to get metadata for path", slog.String("path", parentPath), slog.String("error", err.Error()))
 			continue
 		}
-
 		// Create a joiner to read the metadata
 		metaJoiner, _, err := joiner.New(ctx, store, store, metaRef)
 		if err != nil {
 			logger.Warn("initCache: failed to create reader for metadata", slog.String("path", parentPath), slog.String("error", err.Error()))
 			continue
 		}
-
 		// Read and unmarshal the metadata
 		meta, err := fromMetadata(metaJoiner)
 		if err != nil {
 			logger.Warn("initCache: failed to read metadata", slog.String("path", parentPath), slog.String("error", err.Error()))
 			continue
 		}
-
-		// Mark the path as found if it's in rootPaths
-		if _, exists := foundRootPaths[parentPath]; exists {
-			foundRootPaths[parentPath] = true
-		}
-
 		// Extend the queue with child paths
 		for _, child := range meta.Children {
 			queue = append(queue, filepath.Join(parentPath, child))
 		}
 	}
-
-	return
+	return nil
 }
 
 // New constructs a new swarmDriver instance.
 func New(lk Lookuper, pb Publisher, store store.PutGetter, splitter file.Splitter, encrypt bool) *swarmDriver {
 	logger.Debug("Creating new Instance of swarm-driver")
-
 	d := &swarmDriver{
 		store:     store,
 		encrypt:   encrypt,
 		lookuper:  lk,
 		publisher: pb,
 		splitter:  splitter,
-	}
-
-	// // Add the root path to the driver.
-	for path, val := range foundRootPaths {
-		if !val {
-			if err := d.addPathToRoot(context.Background(), path); err != nil {
-				logger.Error("New: Failed to create root path", "error", err)
-			} else {
-				logger.Debug("New: Successfully created root path", slog.String("path", path))
-			}
-		}
 	}
 	logger.Debug("New: Swarm driver successfully created!")
 	return d
@@ -328,55 +328,6 @@ func isValidPath(path string) error {
 		return fmt.Errorf("isValidPath: Invalid Path: Path should not contain //")
 	}
 	// If all checks pass, the path is valid
-	return nil
-}
-
-func (d *swarmDriver) addPathToRoot(ctx context.Context, path string) error {
-	d.mutex.Lock()
-	defer d.mutex.Unlock()
-	rootPath := "/"
-	// Retrieve root metadata
-	rootMeta, err := d.getMetadata(ctx, rootPath)
-	if err != nil {
-		// If root metadata does not exist, initialize it
-		rootMeta = metaData{
-			IsDir:    true,
-			Path:     rootPath,
-			ModTime:  time.Now().Unix(),
-			Children: []string{},
-		}
-	}
-	if path != "" {
-		// Check if the path is already present in the root's children
-		found := false
-		for _, child := range rootMeta.Children {
-			if child == path {
-				found = true
-				break
-			}
-		}
-		// Add the path to the root's children if it's not already present
-		if !found {
-			rootMeta.Children = append(rootMeta.Children, path)
-			rootMeta.ModTime = time.Now().Unix()
-		}
-	}
-	// Marshal the updated root metadata to JSON
-	metaBuf, err := json.Marshal(rootMeta)
-	if err != nil {
-		return fmt.Errorf("addPathToRoot: failed to marshal metadata: %v", err)
-	}
-	// Split the metadata and get a reference
-	metaRef, err := d.splitter.Split(ctx, io.NopCloser(bytes.NewReader(metaBuf)), int64(len(metaBuf)), d.encrypt)
-	if err != nil || isZeroAddress(metaRef) {
-		return fmt.Errorf("addPathToRoot: failed to split metadata: %v", err)
-	}
-	// Publish the metadata
-	err = d.publisher.Put(ctx, filepath.Join(rootPath, "mtdt"), time.Now().Unix(), metaRef)
-	if err != nil {
-		return fmt.Errorf("addPathToRoot: failed to publish metadata: %v", err)
-	}
-	logger.Debug("addPathToRoot: Success!", slog.String("path", path))
 	return nil
 }
 
@@ -435,11 +386,11 @@ func (d *swarmDriver) putMetadata(ctx context.Context, path string, meta metaDat
 	if err != nil {
 		return fmt.Errorf("putMetadata: failed to publish metadata: %v", err)
 	}
-	// If the path is the root, no need to update parent directories
-	if contains(rootPaths, path) {
+	if path == "/" {
 		return nil
 	}
 	// Update metadata for each parent directory up to the root
+TRAVERSE:
 	for currentPath := filepath.ToSlash(filepath.Dir(path)); ; currentPath = filepath.ToSlash(filepath.Dir(currentPath)) {
 		// Retrieve parent metadata
 		parentMeta, err := d.getMetadata(ctx, currentPath)
@@ -454,40 +405,35 @@ func (d *swarmDriver) putMetadata(ctx context.Context, path string, meta metaDat
 		}
 		// Check if the current path is already a child of the parent
 		childPath := filepath.Base(path)
-		found := false
 		for _, child := range parentMeta.Children {
 			if child == childPath {
-				found = true
-				break
+				break TRAVERSE
 			}
 		}
-		// Add the current path to the parent's children if not already present
-		if !found {
-			parentMeta.Children = append(parentMeta.Children, childPath)
-			parentMeta.ModTime = time.Now().Unix()
 
-			// Marshal the updated parent metadata to JSON
-			parentMetaBuf, err := json.Marshal(parentMeta)
-			if err != nil {
-				return fmt.Errorf("putMetadata: failed to marshal parent metadata: %v", err)
-			}
-			// Split the parent metadata and get a reference
-			parentMetaRef, err := d.splitter.Split(ctx, io.NopCloser(bytes.NewReader(parentMetaBuf)), int64(len(parentMetaBuf)), d.encrypt)
-			if err != nil || isZeroAddress(parentMetaRef) {
-				return fmt.Errorf("putMetadata: failed to split parent metadata: %v", err)
-			}
-			// Publish the parent metadata
-			err = d.publisher.Put(ctx, filepath.Join(currentPath, "mtdt"), time.Now().Unix(), parentMetaRef)
-			if err != nil {
-				return fmt.Errorf("putMetadata: failed to publish parent metadata: %v", err)
-			}
+		parentMeta.Children = append(parentMeta.Children, childPath)
+		parentMeta.ModTime = time.Now().Unix()
+		// Marshal the updated parent metadata to JSON
+		parentMetaBuf, err := json.Marshal(parentMeta)
+		if err != nil {
+			return fmt.Errorf("putMetadata: failed to marshal parent metadata: %v", err)
 		}
-		// Break the loop if we have reached the root
-		if contains(rootPaths, currentPath) {
-			break
+		// Split the parent metadata and get a reference
+		parentMetaRef, err := d.splitter.Split(ctx, io.NopCloser(bytes.NewReader(parentMetaBuf)), int64(len(parentMetaBuf)), d.encrypt)
+		if err != nil || isZeroAddress(parentMetaRef) {
+			return fmt.Errorf("putMetadata: failed to split parent metadata: %v", err)
 		}
+		// Publish the parent metadata
+		err = d.publisher.Put(ctx, filepath.Join(currentPath, "mtdt"), time.Now().Unix(), parentMetaRef)
+		if err != nil {
+			return fmt.Errorf("putMetadata: failed to publish parent metadata: %v", err)
+		}
+
 		// Move up to the parent directory
 		path = currentPath
+		if path == "/" {
+			break TRAVERSE
+		}
 	}
 	logger.Debug("putMetadata: Success!", slog.String("path", path))
 	return nil

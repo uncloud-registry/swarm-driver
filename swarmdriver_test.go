@@ -19,7 +19,6 @@ import (
 	beecrypto "github.com/ethersphere/bee/v2/pkg/crypto"
 	"github.com/ethersphere/bee/v2/pkg/file/splitter"
 	swarmdriver "github.com/uncloud-registry/swarm-driver"
-	"github.com/uncloud-registry/swarm-driver/cached"
 	"github.com/uncloud-registry/swarm-driver/lookuper"
 	"github.com/uncloud-registry/swarm-driver/publisher"
 	"github.com/uncloud-registry/swarm-driver/store/beestore"
@@ -52,18 +51,17 @@ func newSwarmDriverInMemoryConstructor() (storagedriver.StorageDriver, error) {
 
 	store := teststore.NewSwarmInMemoryStore()
 
-	clp, err := cached.New(
-		lookuper.New(store, ethAddress),
-		publisher.New(store, signer, lookuper.Latest(store, ethAddress)),
-		120*time.Second,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("Create: failed to create cached lookuper publisher: %v", err)
-	}
-
+	lk := lookuper.New(store, ethAddress)
+	pb := publisher.New(store, signer, lookuper.Latest(store, ethAddress))
 	newSplitter := splitter.NewSimpleSplitter(store)
 
-	return swarmdriver.New(clp, clp, store, newSplitter, encrypt), nil
+	ctx := context.Background()
+	err = swarmdriver.InitCache(ctx, lk, pb, store, newSplitter)
+	if err != nil {
+		return nil, fmt.Errorf("Inmemory Test: failed to init cache: %v", err)
+	}
+
+	return swarmdriver.New(lk, pb, store, newSplitter, encrypt), nil
 }
 
 func TestInMemorySwarmDriverSuite(t *testing.T) {
@@ -111,6 +109,11 @@ func newSwarmDriverBeeConstructor(t *testing.T) (storagedriver.StorageDriver, er
 	lk := lookuper.New(fstore, ethAddress)
 	pb := publisher.New(fstore, signer, lookuper.Latest(fstore, ethAddress))
 	newSplitter := splitter.NewSimpleSplitter(bstore)
+
+	err = swarmdriver.InitCache(ctx, lk, pb, bstore, newSplitter)
+	if err != nil {
+		return nil, fmt.Errorf("Bee Test: failed to init cache: %v", err)
+	}
 
 	return swarmdriver.New(lk, pb, bstore, newSplitter, encrypt), nil
 }

@@ -11,7 +11,7 @@ import (
 	"github.com/uncloud-registry/swarm-driver/publisher"
 )
 
-type cachedLookuperPublisher struct {
+type CachedLookuperPublisher struct {
 	lookuper.Lookuper
 	publisher.Publisher
 
@@ -26,12 +26,12 @@ type cachedResult struct {
 	ts  int64
 }
 
-func New(lk lookuper.Lookuper, pb publisher.Publisher, timeout time.Duration) (*cachedLookuperPublisher, error) {
+func New(lk lookuper.Lookuper, pb publisher.Publisher, timeout time.Duration) (*CachedLookuperPublisher, error) {
 	cache, err := lru.New[string, cachedResult](10000)
 	if err != nil {
 		return nil, err
 	}
-	return &cachedLookuperPublisher{
+	return &CachedLookuperPublisher{
 		Lookuper:  lk,
 		Publisher: pb,
 		timeout:   timeout,
@@ -39,7 +39,7 @@ func New(lk lookuper.Lookuper, pb publisher.Publisher, timeout time.Duration) (*
 	}, nil
 }
 
-func (c *cachedLookuperPublisher) Get(ctx context.Context, id string, version int64) (swarm.Address, error) {
+func (c *CachedLookuperPublisher) Get(ctx context.Context, id string, version int64) (swarm.Address, error) {
 	c.mtx.RLock()
 	cRef, found := c.cached.Get(id)
 	c.mtx.RUnlock()
@@ -66,14 +66,14 @@ func (c *cachedLookuperPublisher) Get(ctx context.Context, id string, version in
 	return ref, err
 }
 
-func (c *cachedLookuperPublisher) get(ctx context.Context, id string, version int64) (swarm.Address, error) {
+func (c *CachedLookuperPublisher) get(ctx context.Context, id string, version int64) (swarm.Address, error) {
 	cctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
 	return c.Lookuper.Get(cctx, id, version)
 }
 
-func (c *cachedLookuperPublisher) Put(ctx context.Context, id string, version int64, ref swarm.Address) error {
+func (c *CachedLookuperPublisher) Put(ctx context.Context, id string, version int64, ref swarm.Address) error {
 	err := c.Publisher.Put(ctx, id, version, ref)
 	if err == nil {
 		c.mtx.Lock()
@@ -84,7 +84,7 @@ func (c *cachedLookuperPublisher) Put(ctx context.Context, id string, version in
 	return err
 }
 
-func (c *cachedLookuperPublisher) SetTimeout(timeout time.Duration) {
+func (c *CachedLookuperPublisher) SetTimeout(timeout time.Duration) {
 	c.timeout = timeout
 	return
 }
