@@ -55,6 +55,12 @@ func newSwarmDriverInMemoryConstructor() (storagedriver.StorageDriver, error) {
 	pb := publisher.New(store, signer, lookuper.Latest(store, ethAddress))
 	newSplitter := splitter.NewSimpleSplitter(store)
 
+	ctx := context.Background()
+	err = swarmdriver.InitCache(ctx, lk, pb, store, newSplitter)
+	if err != nil {
+		return nil, fmt.Errorf("Inmemory Test: failed to init cache: %v", err)
+	}
+
 	return swarmdriver.New(lk, pb, store, newSplitter, encrypt), nil
 }
 
@@ -103,6 +109,11 @@ func newSwarmDriverBeeConstructor(t *testing.T) (storagedriver.StorageDriver, er
 	lk := lookuper.New(fstore, ethAddress)
 	pb := publisher.New(fstore, signer, lookuper.Latest(fstore, ethAddress))
 	newSplitter := splitter.NewSimpleSplitter(bstore)
+
+	err = swarmdriver.InitCache(ctx, lk, pb, bstore, newSplitter)
+	if err != nil {
+		return nil, fmt.Errorf("Bee Test: failed to init cache: %v", err)
+	}
 
 	return swarmdriver.New(lk, pb, bstore, newSplitter, encrypt), nil
 }
