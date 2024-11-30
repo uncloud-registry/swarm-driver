@@ -198,13 +198,35 @@ func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[st
 		if err != nil {
 			return nil, fmt.Errorf("Create: failed to initialize cache: %v", err)
 		}
-		clp.SetTimeout(3 * time.Second)
+		clp.SetTimeout(500 * time.Millisecond)
 		lk = clp
 		pb = clp
 
 	}
 	// Pass the signer to the New function instead of generating the key inside.
 	return New(lk, pb, store, newSplitter, encrypt), nil
+}
+
+func addRoot(ctx context.Context, splitter file.Splitter, pb Publisher) error {
+	rootMeta := metaData{
+		IsDir:    true,
+		Path:     "/",
+		ModTime:  time.Now().Unix(),
+		Children: []string{},
+	}
+	metaBuf, err := json.Marshal(rootMeta)
+	if err != nil {
+		return fmt.Errorf("addRoot: failed to marshal root metadata: %w", err)
+	}
+	metaRef, err := splitter.Split(ctx, io.NopCloser(bytes.NewReader(metaBuf)), int64(len(metaBuf)), false)
+	if err != nil || isZeroAddress(metaRef) {
+		return fmt.Errorf("addRoot: failed to split root metadata: %w", err)
+	}
+	err = pb.Put(ctx, filepath.Join("/", "mtdt"), time.Now().Unix(), metaRef)
+	if err != nil {
+		return fmt.Errorf("addRoot: failed to publish root metadata: %w", err)
+	}
+	return nil
 }
 
 // initCache initializes the cache and marks whether any of the rootPaths were found.
@@ -223,37 +245,28 @@ func initCache(ctx context.Context, lk lookuper.Lookuper, pb publisher.Publisher
 		if err != nil {
 			if parentPath == "/" {
 				logger.Warn("initCache: root path does not exist.", slog.String("error", err.Error()))
-				rootMeta := metaData{
-					IsDir:    true,
-					Path:     "/",
-					ModTime:  time.Now().Unix(),
-					Children: []string{},
-				}
-				metaBuf, err := json.Marshal(rootMeta)
+				err = addRoot(ctx, splitter, pb)
 				if err != nil {
-					logger.Error("initCache: failed to marshal root metadata", slog.String("error", err.Error()))
-					return err
+					return fmt.Errorf("initCache: failed to add root: %w", err)
 				}
-				metaRef, err = splitter.Split(ctx, io.NopCloser(bytes.NewReader(metaBuf)), int64(len(metaBuf)), false)
-				if err != nil || isZeroAddress(metaRef) {
-					logger.Error("initCache: failed to split root metadata", slog.String("error", err.Error()))
-					return err
-				}
-				err = pb.Put(ctx, filepath.Join(parentPath, "mtdt"), time.Now().Unix(), metaRef)
-				if err != nil {
-					logger.Error("initCache: failed to publish root metadata", slog.String("error", err.Error()))
-					return err
-				}
-				logger.Debug("initCache: root metadata published")
 				return nil
 			}
 			logger.Error("initCache: failed to get metadata for path", slog.String("path", parentPath), slog.String("error", err.Error()))
 			continue
 		}
 		// Create a joiner to read the metadata
+		logger.Debug("initCache: metadata reference found", "path", parentPath, "metaRef", metaRef)
 		metaJoiner, _, err := joiner.New(ctx, store, store, metaRef)
 		if err != nil {
 			logger.Warn("initCache: failed to create reader for metadata", slog.String("path", parentPath), slog.String("error", err.Error()))
+			if parentPath == "/" {
+				logger.Warn("initCache: root path does not exist.", slog.String("error", err.Error()))
+				err = addRoot(ctx, splitter, pb)
+				if err != nil {
+					return fmt.Errorf("initCache: failed to add root: %w", err)
+				}
+				return nil
+			}
 			continue
 		}
 		// Read and unmarshal the metadata
