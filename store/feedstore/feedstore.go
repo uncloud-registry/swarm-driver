@@ -13,7 +13,6 @@ import (
 	"github.com/ethersphere/bee/v2/pkg/soc"
 	"github.com/ethersphere/bee/v2/pkg/storage"
 	"github.com/ethersphere/bee/v2/pkg/swarm"
-	"github.com/uncloud-registry/swarm-driver/store/beestore"
 )
 
 type FeedStore struct {
@@ -22,14 +21,9 @@ type FeedStore struct {
 	baseUrl string
 	owner   string
 	batch   string
-	pin     bool
 }
 
-func NewFeedStore(host string, port int, tls, pin bool, batch, owner string) (*FeedStore, error) {
-	chunkGetter, err := beestore.NewBeeStore(host, port, tls, batch, true, false)
-	if err != nil {
-		return nil, fmt.Errorf("FeedStore: NewFeedStore: failed creating chunk getter %w", err)
-	}
+func NewFeedStore(host string, port int, tls bool, batch, owner string, getter storage.Getter) (*FeedStore, error) {
 	scheme := "http"
 	if tls {
 		scheme += "s"
@@ -41,11 +35,10 @@ func NewFeedStore(host string, port int, tls, pin bool, batch, owner string) (*F
 	}
 	return &FeedStore{
 		Client:  http.DefaultClient,
-		getter:  chunkGetter,
+		getter:  getter,
 		baseUrl: u.String(),
 		owner:   owner,
 		batch:   batch,
-		pin:     pin,
 	}, nil
 }
 
@@ -54,7 +47,6 @@ func (f *FeedStore) Get(ctx context.Context, address swarm.Address) (swarm.Chunk
 }
 
 func (f *FeedStore) Put(ctx context.Context, ch swarm.Chunk) (err error) {
-
 	if !soc.Valid(ch) {
 		return errors.New("FeedStore: Put: chunk not a single owner chunk")
 	}
@@ -90,9 +82,6 @@ func (f *FeedStore) putSOCChunk(ctx context.Context, ch swarm.Chunk) error {
 		return fmt.Errorf("FeedStore: putSOCChunk: failed creating HTTP req %w", err)
 	}
 	req.Header.Set("Swarm-Postage-Batch-Id", f.batch)
-	if f.pin {
-		req.Header.Set("Swarm-Pin", "true")
-	}
 	resp, err := f.Client.Do(req)
 	if err != nil {
 		return fmt.Errorf("FeedStore: putSOCChunk: failed executing HTTP req %w", err)

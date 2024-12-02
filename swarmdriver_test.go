@@ -51,8 +51,8 @@ func newSwarmDriverInMemoryConstructor() (storagedriver.StorageDriver, error) {
 
 	store := teststore.NewSwarmInMemoryStore()
 
-	lk := lookuper.New(store, ethAddress)
-	pb := publisher.New(store, signer, lookuper.Latest(store, ethAddress))
+	lk := lookuper.New(logger.With("component", "lookuper"), store, ethAddress)
+	pb := publisher.New(logger.With("component", "lookuper"), store, signer, lookuper.Latest(store, ethAddress))
 	newSplitter := splitter.NewSimpleSplitter(store)
 
 	ctx := context.Background()
@@ -98,16 +98,16 @@ func newSwarmDriverBeeConstructor(t *testing.T) (storagedriver.StorageDriver, er
 	if err != nil {
 		return nil, fmt.Errorf("Bee Test: failed to get new batchID: %v", err)
 	}
-	fstore, err := feedstore.NewFeedStore(host, port, false, true, batchID, owner)
-	if err != nil {
-		return nil, fmt.Errorf("Bee Test: failed to create feedstore: %v", err)
-	}
 	bstore, err := beestore.NewBeeStore(host, port, false, batchID, false, true)
 	if err != nil {
 		return nil, fmt.Errorf("Bee Test: failed to create BeeStore: %v", err)
 	}
-	lk := lookuper.New(fstore, ethAddress)
-	pb := publisher.New(fstore, signer, lookuper.Latest(fstore, ethAddress))
+	fstore, err := feedstore.NewFeedStore(host, port, false, batchID, owner, bstore)
+	if err != nil {
+		return nil, fmt.Errorf("Bee Test: failed to create feedstore: %v", err)
+	}
+	lk := lookuper.New(logger.With("component", "lookuper"), fstore, ethAddress)
+	pb := publisher.New(logger.With("component", "publisher"), fstore, signer, lookuper.Latest(fstore, ethAddress))
 	newSplitter := splitter.NewSimpleSplitter(bstore)
 
 	err = swarmdriver.InitCache(ctx, lk, pb, bstore, newSplitter)
