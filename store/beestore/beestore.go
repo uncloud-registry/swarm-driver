@@ -215,10 +215,12 @@ func (b *BeeStore) Put(ctx context.Context, ch swarm.Chunk) (err error) {
 func (b *BeeStore) Get(ctx context.Context, address swarm.Address) (ch swarm.Chunk, err error) {
 	addressHex := address.String()
 	url := strings.Join([]string{b.baseUrl, addressHex}, "/")
+	fmt.Println("Beestore Get: url", url)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("Beestore: Get: failed creating http req %w", err)
 	}
+	fmt.Printf("Beestore Get: req URL: %s, Method: %s, Headers: %v\n", req.URL, req.Method, req.Header)
 	res, err := b.Client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("Beestore: Get: failed executing http req %w", err)
@@ -232,6 +234,7 @@ func (b *BeeStore) Get(ctx context.Context, address swarm.Address) (ch swarm.Chu
 		return nil, fmt.Errorf("Beestore: Get: failed reading chunk body %w", err)
 	}
 	ch = swarm.NewChunk(address, chunkData)
+	fmt.Println("Beestore Get: chunk", ch)
 	return ch, nil
 }
 

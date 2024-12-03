@@ -114,14 +114,12 @@ func getNewBatchID(host string, port int) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("Error converting val for stamp  %v", val["batchID"])
 	}
-
 	return batchID, nil
 }
 
 // Create initializes a new instance of the swarmDriver with the provided parameters.
 func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[string]interface{}) (storagedriver.StorageDriver, error) {
 	logger.Debug("Create Hit", slog.Any("parameters", parameters))
-
 	encrypt, ok := parameters["encrypt"].(bool)
 	if !ok {
 		return nil, fmt.Errorf("Create: missing or invalid 'encrypt' parameter")
@@ -143,6 +141,10 @@ func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[st
 		return nil, fmt.Errorf("Create: missing or invalid 'port' parameter")
 	}
 	batchID, ok := parameters["batchID"].(string)
+	if !ok {
+		return nil, fmt.Errorf("Create: missing or invalid 'batchID' parameter")
+	}
+	cache, ok := parameters["cache"].(bool)
 	if !ok {
 		return nil, fmt.Errorf("Create: missing or invalid 'batchID' parameter")
 	}
@@ -173,35 +175,50 @@ func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[st
 				return nil, fmt.Errorf("Create: failed to get new batchID: %v", err)
 			}
 		}
-		bstore, err := beestore.NewBeeStore(host, port, false, batchID, false, true)
-		if err != nil {
-			return nil, fmt.Errorf("Create: failed to create BeeStore: %v", err)
-		}
-		store, err = cachedstore.New(bstore)
-		if err != nil {
-			return nil, fmt.Errorf("Create: failed to create cachedstore: %v", err)
-		}
-		fstore, err := feedstore.NewFeedStore(host, port, false, true, batchID, owner)
-		if err != nil {
-			return nil, fmt.Errorf("Create: failed to create feedstore: %v", err)
-		}
-		clp, err := cached.New(
-			lookuper.New(fstore, ethAddress),
-			publisher.New(fstore, signer, lookuper.Latest(fstore, ethAddress)),
-			120*time.Second,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("Create: failed to create cached lookuper publisher: %v", err)
-		}
-		newSplitter = splitter.NewSimpleSplitter(store)
-		err = initCache(ctx, clp, clp, store, newSplitter)
-		if err != nil {
-			return nil, fmt.Errorf("Create: failed to initialize cache: %v", err)
-		}
-		clp.SetTimeout(500 * time.Millisecond)
-		lk = clp
-		pb = clp
+		if cache {
+			bstore, err := beestore.NewBeeStore(host, port, false, batchID, false, true)
+			if err != nil {
+				return nil, fmt.Errorf("Create: failed to create BeeStore: %v", err)
+			}
+			store, err = cachedstore.New(bstore)
+			if err != nil {
+				return nil, fmt.Errorf("Create: failed to create cachedstore: %v", err)
+			}
+			fstore, err := feedstore.NewFeedStore(host, port, false, true, batchID, owner)
+			if err != nil {
+				return nil, fmt.Errorf("Create: failed to create feedstore: %v", err)
+			}
+			clp, err := cached.New(
+				lookuper.New(fstore, ethAddress),
+				publisher.New(fstore, signer, lookuper.Latest(fstore, ethAddress)),
+				120*time.Second,
+			)
+			if err != nil {
+				return nil, fmt.Errorf("Create: failed to create cached lookuper publisher: %v", err)
+			}
+			newSplitter = splitter.NewSimpleSplitter(store)
+			err = initCache(ctx, clp, clp, store, newSplitter)
+			if err != nil {
+				return nil, fmt.Errorf("Create: failed to initialize cache: %v", err)
+			}
+			clp.SetTimeout(500 * time.Millisecond)
+			lk = clp
+			pb = clp
+		} else {
+			store, err := beestore.NewBeeStore(host, port, false, batchID, false, true)
+			if err != nil {
+				return nil, fmt.Errorf("Create: failed to create BeeStore: %v", err)
+			}
+			fstore, err := feedstore.NewFeedStore(host, port, false, true, batchID, owner)
+			if err != nil {
+				return nil, fmt.Errorf("Create: failed to create feedstore: %v", err)
+			}
+			lk = lookuper.New(fstore, ethAddress)
+			pb = publisher.New(fstore, signer, lookuper.Latest(fstore, ethAddress))
+			newSplitter = splitter.NewSimpleSplitter(store)
 
+			addRoot(ctx, newSplitter, pb)
+		}
 	}
 	// Pass the signer to the New function instead of generating the key inside.
 	return New(lk, pb, store, newSplitter, encrypt), nil
@@ -216,16 +233,20 @@ func addRoot(ctx context.Context, splitter file.Splitter, pb Publisher) error {
 	}
 	metaBuf, err := json.Marshal(rootMeta)
 	if err != nil {
+		logger.Error("addRoot: failed to marshal root metadata", slog.String("error", err.Error()))
 		return fmt.Errorf("addRoot: failed to marshal root metadata: %w", err)
 	}
 	metaRef, err := splitter.Split(ctx, io.NopCloser(bytes.NewReader(metaBuf)), int64(len(metaBuf)), false)
 	if err != nil || isZeroAddress(metaRef) {
+		logger.Error("addRoot: failed to split root metadata", slog.String("error", err.Error()))
 		return fmt.Errorf("addRoot: failed to split root metadata: %w", err)
 	}
 	err = pb.Put(ctx, filepath.Join("/", "mtdt"), time.Now().Unix(), metaRef)
 	if err != nil {
+		logger.Error("addRoot: failed to publish root metadata", slog.String("error", err.Error()))
 		return fmt.Errorf("addRoot: failed to publish root metadata: %w", err)
 	}
+	logger.Debug("addRoot: Success!")
 	return nil
 }
 
@@ -260,7 +281,6 @@ func initCache(ctx context.Context, lk lookuper.Lookuper, pb publisher.Publisher
 		if err != nil {
 			logger.Warn("initCache: failed to create reader for metadata", slog.String("path", parentPath), slog.String("error", err.Error()))
 			if parentPath == "/" {
-				logger.Warn("initCache: root path does not exist.", slog.String("error", err.Error()))
 				err = addRoot(ctx, splitter, pb)
 				if err != nil {
 					return fmt.Errorf("initCache: failed to add root: %w", err)
@@ -369,6 +389,7 @@ func (d *swarmDriver) getMetadata(ctx context.Context, path string) (metaData, e
 	if err != nil {
 		return metaData{}, fmt.Errorf("getMetadata: failed to get metadata for path %s %v", path, err)
 	}
+	logger.Debug("getMetadata Hit", slog.String("path", path), slog.String("metaRef", metaRef.String()))
 	// Create a joiner to read the metadata.
 	metaJoiner, _, err := joiner.New(ctx, d.store, d.store, metaRef)
 	if err != nil {
@@ -394,6 +415,7 @@ func (d *swarmDriver) putMetadata(ctx context.Context, path string, meta metaDat
 	if err != nil || isZeroAddress(metaRef) {
 		return fmt.Errorf("putMetadata: failed to split metadata: %v", err)
 	}
+	logger.Debug("putMetadata: Metadata reference", slog.String("path", path), slog.String("metaRef", metaRef.String()))
 	// Publish the metadata
 	err = d.publisher.Put(ctx, filepath.Join(path, "mtdt"), time.Now().Unix(), metaRef)
 	if err != nil {
@@ -441,7 +463,6 @@ TRAVERSE:
 		if err != nil {
 			return fmt.Errorf("putMetadata: failed to publish parent metadata: %v", err)
 		}
-
 		// Move up to the parent directory
 		path = currentPath
 		if path == "/" {
@@ -452,15 +473,6 @@ TRAVERSE:
 	return nil
 }
 
-func contains(slice []string, element string) bool {
-	for _, el := range slice {
-		if el == element {
-			return true
-		}
-	}
-	return false
-}
-
 // getData retrieves the data stored at the given path as a byte slice.
 func (d *swarmDriver) getData(ctx context.Context, path string) ([]byte, error) {
 	// Lookup the data reference for the given path.
@@ -468,6 +480,7 @@ func (d *swarmDriver) getData(ctx context.Context, path string) ([]byte, error) 
 	if err != nil {
 		return nil, fmt.Errorf("getData: failed to lookup data: %v", err)
 	}
+	logger.Debug("getData Hit", slog.String("path", path), slog.String("dataRef", dataRef.String()))
 	// Create a joiner to read the data.
 	dataJoiner, _, err := joiner.New(ctx, d.store, d.store, dataRef)
 	if err != nil {
@@ -500,6 +513,7 @@ func (d *swarmDriver) putData(ctx context.Context, path string, data []byte) err
 	if err != nil || isZeroAddress(dataRef) {
 		return fmt.Errorf("putData: failed to split data: %v", err)
 	}
+	logger.Debug("putData: Data reference", slog.String("path", path), slog.String("dataRef", dataRef.String()))
 	// Publish the data reference.
 	err = d.publisher.Put(ctx, filepath.Join(path, "data"), time.Now().Unix(), dataRef)
 	if err != nil {

@@ -3,6 +3,8 @@ package cachedstore
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"os"
 	"sync"
 
 	"github.com/ethersphere/bee/v2/pkg/swarm"
@@ -15,6 +17,10 @@ type cachedStore struct {
 	cache *lru.Cache[string, swarm.Chunk]
 	mtx   sync.RWMutex
 }
+
+var logger = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+	Level: slog.LevelDebug,
+}))
 
 func New(st store.PutGetter) (*cachedStore, error) {
 	cache, err := lru.New[string, swarm.Chunk](100000)
@@ -35,7 +41,9 @@ func (c *cachedStore) Get(ctx context.Context, address swarm.Address) (ch swarm.
 			_ = c.cache.Add(address.ByteString(), ch)
 			c.mtx.Unlock()
 		}
+		logger.Warn("cachedstore.Get", "address", address.String(), "err", err)
 	}
+	logger.Debug("cachedstore.Get", "address", address.String())
 	return
 }
 
@@ -46,5 +54,6 @@ func (c *cachedStore) Put(ctx context.Context, ch swarm.Chunk) (err error) {
 		_ = c.cache.Add(ch.Address().ByteString(), ch)
 		c.mtx.Unlock()
 	}
+	logger.Warn("cachedstore.Put", "address", ch.Address().String(), "err", err)
 	return err
 }

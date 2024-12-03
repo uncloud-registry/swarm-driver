@@ -85,12 +85,12 @@ func newSwarmDriverBeeConstructor(t *testing.T) (storagedriver.StorageDriver, er
 		}
 	})
 	privateKeyStr := "8e5c893846223894ed783acd26de67ce7d8a614107259dce1c6d6e42da4d24f57a22536487c200c38337afaa3f514ecdd38006657f4e05725baa21e4cf606892054e00dd947d6e737c4be92306d49fa4"
-	encrypt := false
+	encrypt := false  
 	host := "localhost"
 	port := 1633
 	signer := getTestSigner(privateKeyStr)
 	ethAddress, err := signer.EthereumAddress()
-	if err != nil {
+	if err != nil { 
 		return nil, fmt.Errorf("Bee Test: failed to get ethereum address: %v", err)
 	}
 	owner := strings.TrimPrefix(ethAddress.String(), "0x")
@@ -151,7 +151,6 @@ func StartBeeNodeContainer(ctx context.Context) (testcontainers.Container, error
 	if err != nil {
 		return nil, fmt.Errorf("Failed to start Bee node container: %w", err)
 	}
-
 	return container, nil
 }
 
