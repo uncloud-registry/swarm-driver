@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -14,11 +15,8 @@ import (
 	"github.com/ethersphere/bee/v2/pkg/soc"
 	"github.com/ethersphere/bee/v2/pkg/storage"
 	"github.com/ethersphere/bee/v2/pkg/swarm"
-	logger "github.com/ipfs/go-log/v2"
 	"github.com/uncloud-registry/swarm-driver/store"
 )
-
-var log = logger.Logger("lookuper")
 
 type Lookuper interface {
 	Get(ctx context.Context, id string, version int64) (swarm.Address, error)
@@ -28,13 +26,16 @@ type lookuperImpl struct {
 	store   store.PutGetter
 	owner   common.Address
 	hintMap sync.Map
+	logger  *slog.Logger
 }
 
-func New(store store.PutGetter, owner common.Address) Lookuper {
-	return &lookuperImpl{store: store, owner: owner}
+func New(logger *slog.Logger, store store.PutGetter, owner common.Address) Lookuper {
+	return &lookuperImpl{logger: logger, store: store, owner: owner}
 }
 
 func (l *lookuperImpl) Get(ctx context.Context, id string, version int64) (swarm.Address, error) {
+	start := time.Now()
+
 	lk, err := factory.New(l.store).NewLookup(feeds.Sequence, feeds.New([]byte(id), l.owner))
 	if err != nil {
 		return swarm.ZeroAddress, fmt.Errorf("failed creating lookuper %w", err)
@@ -43,9 +44,11 @@ func (l *lookuperImpl) Get(ctx context.Context, id string, version int64) (swarm
 	hint := uint64(l.hint(id))
 	ch, current, _, err := lk.At(ctx, version, hint)
 	if err != nil {
+		l.logger.Error("lookup error", "id", id, "version", version, "hint", hint, "error", err)
 		return swarm.ZeroAddress, fmt.Errorf("failed looking up key %w", err)
 	}
 	if ch == nil {
+		l.logger.Error("lookup error", "id", id, "version", version, "hint", hint, "error", "invalid chunk")
 		return swarm.ZeroAddress, errors.New("invalid chunk lookup")
 	}
 
@@ -55,7 +58,7 @@ func (l *lookuperImpl) Get(ctx context.Context, id string, version int64) (swarm
 	}
 
 	l.setHint(id, current)
-	log.Debugf("lookup complete id %s version %d found %d ref %s", id, version, ts, ref.String())
+	l.logger.Debug("lookup complete", "id", id, "version", version, "found", ts, "ref", ref.String(), "duration", time.Since(start))
 
 	return ref, nil
 }

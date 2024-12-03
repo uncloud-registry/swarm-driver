@@ -2,6 +2,7 @@ package cached
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -15,6 +16,7 @@ type CachedLookuperPublisher struct {
 	lookuper.Lookuper
 	publisher.Publisher
 
+	logger  *slog.Logger
 	timeout time.Duration
 	cached  *lru.Cache[string, cachedResult]
 	mtx     sync.RWMutex
@@ -26,7 +28,12 @@ type cachedResult struct {
 	ts  int64
 }
 
-func New(lk lookuper.Lookuper, pb publisher.Publisher, timeout time.Duration) (*CachedLookuperPublisher, error) {
+func New(
+	logger *slog.Logger,
+	lk lookuper.Lookuper,
+	pb publisher.Publisher,
+	timeout time.Duration,
+) (*CachedLookuperPublisher, error) {
 	cache, err := lru.New[string, cachedResult](10000)
 	if err != nil {
 		return nil, err
@@ -34,12 +41,14 @@ func New(lk lookuper.Lookuper, pb publisher.Publisher, timeout time.Duration) (*
 	return &CachedLookuperPublisher{
 		Lookuper:  lk,
 		Publisher: pb,
+		logger:    logger,
 		timeout:   timeout,
 		cached:    cache,
 	}, nil
 }
 
 func (c *CachedLookuperPublisher) Get(ctx context.Context, id string, version int64) (swarm.Address, error) {
+	start := time.Now()
 	c.mtx.RLock()
 	cRef, found := c.cached.Get(id)
 	c.mtx.RUnlock()
@@ -55,14 +64,26 @@ func (c *CachedLookuperPublisher) Get(ctx context.Context, id string, version in
 			}()
 		}
 		res := cRef
-		// log.Debugf("returning cached result id %s ref %s err %v", id, res.ref.String(), res.err)
+		c.logger.Debug(
+			"returning cached result",
+			"id", id,
+			"ref", res.ref.String(),
+			"err", res.err,
+			"duration", time.Since(start),
+		)
 		return res.ref, res.err
 	}
 	ref, err := c.get(ctx, id, version)
 	c.mtx.Lock()
 	_ = c.cached.Add(id, cachedResult{ref: ref, err: err, ts: time.Now().Unix()})
 	c.mtx.Unlock()
-	// log.Debugf("adding to cache id %s ref %s err %v", id, ref.String(), err)
+	c.logger.Debug(
+		"adding result to cache",
+		"id", id,
+		"ref", ref.String(),
+		"err", err,
+		"duration", time.Since(start),
+	)
 	return ref, err
 }
 
@@ -74,12 +95,18 @@ func (c *CachedLookuperPublisher) get(ctx context.Context, id string, version in
 }
 
 func (c *CachedLookuperPublisher) Put(ctx context.Context, id string, version int64, ref swarm.Address) error {
+	start := time.Now()
 	err := c.Publisher.Put(ctx, id, version, ref)
 	if err == nil {
 		c.mtx.Lock()
 		_ = c.cached.Add(id, cachedResult{ref: ref, ts: time.Now().Unix()})
 		c.mtx.Unlock()
-		// log.Debugf("adding to cache id %s ref %s", id, ref.String())
+		c.logger.Debug(
+			"adding new entry to cache",
+			"id", id,
+			"ref", ref.String(),
+			"duration", time.Since(start),
+		)
 	}
 	return err
 }

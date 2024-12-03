@@ -4,20 +4,28 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"io"
+	"log/slog"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/ethersphere/bee/v2/pkg/crypto"
 	"github.com/ethersphere/bee/v2/pkg/feeds/sequence"
 	"github.com/ethersphere/bee/v2/pkg/swarm"
-	logger "github.com/ipfs/go-log/v2"
 	"github.com/uncloud-registry/swarm-driver/lookuper"
 	"github.com/uncloud-registry/swarm-driver/store/teststore"
 )
 
+func newTestLogger(w io.Writer) *slog.Logger {
+	testLogger := slog.NewTextHandler(w, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	})
+	return slog.New(testLogger)
+}
+
 func TestLookuper(t *testing.T) {
-	// set higher level here if required
-	_ = logger.SetLogLevel("*", "Error")
+	logger := newTestLogger(os.Stdout)
 	store := teststore.NewSwarmInMemoryStore()
 	testID := "test"
 	pk, _ := crypto.GenerateSecp256k1Key()
@@ -30,7 +38,7 @@ func TestLookuper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lkpr := lookuper.New(store, owner)
+	lkpr := lookuper.New(logger, store, owner)
 	var lastUpdate int64
 	for i := 1; i <= 3; i++ {
 		now := time.Now().Unix()
