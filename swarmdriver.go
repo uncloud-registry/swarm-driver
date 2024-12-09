@@ -70,6 +70,7 @@ type swarmDriver struct {
 	publisher Publisher       // Interface for publishing data references.
 	lookuper  Lookuper        // Interface for looking up data references.
 	splitter  file.Splitter   // Interface for splitting files into chunks.
+	namespace string          // Namespace for the driver.
 }
 
 // metaData represents the metadata for a file or directory.
@@ -121,7 +122,6 @@ func getNewBatchID(host string, port int) (string, error) {
 // Create initializes a new instance of the swarmDriver with the provided parameters.
 func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[string]interface{}) (storagedriver.StorageDriver, error) {
 	logger.Debug("Create Hit", slog.Any("parameters", parameters))
-
 	encrypt, ok := parameters["encrypt"].(bool)
 	if !ok {
 		return nil, fmt.Errorf("Create: missing or invalid 'encrypt' parameter")
@@ -145,6 +145,10 @@ func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[st
 	batchID, ok := parameters["batchID"].(string)
 	if !ok {
 		return nil, fmt.Errorf("Create: missing or invalid 'batchID' parameter")
+	}
+	namespace, ok := parameters["namespace"].(string)
+	if !ok {
+		return nil, fmt.Errorf("Create: missing or invalid 'namespace' parameter")
 	}
 	signer := getSigner(privateKeyStr)
 	ethAddress, err := signer.EthereumAddress()
@@ -201,20 +205,20 @@ func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[st
 		}
 		lk = clp
 		pb = clp
-		err = initCache(ctx, lk, pb, store, newSplitter)
+		err = initCache(ctx, lk, pb, store, newSplitter, namespace)
 		if err != nil {
 			return nil, fmt.Errorf("Create: failed to initialize cache: %v", err)
 		}
 		clp.SetTimeout(time.Millisecond * 100)
 	}
 	// Pass the signer to the New function instead of generating the key inside.
-	return New(lk, pb, store, newSplitter, encrypt), nil
+	return New(lk, pb, store, newSplitter, encrypt, namespace), nil
 }
 
-func addRoot(ctx context.Context, splitter file.Splitter, pb Publisher) error {
+func addRoot(ctx context.Context, splitter file.Splitter, pb Publisher, namespace string) error {
 	rootMeta := metaData{
 		IsDir:    true,
-		Path:     "/",
+		Path:     namespace,
 		ModTime:  time.Now().Unix(),
 		Children: []string{},
 	}
@@ -226,17 +230,18 @@ func addRoot(ctx context.Context, splitter file.Splitter, pb Publisher) error {
 	if err != nil || isZeroAddress(metaRef) {
 		return fmt.Errorf("addRoot: failed to split root metadata: %w", err)
 	}
-	err = pb.Put(ctx, filepath.Join("/", "mtdt"), time.Now().Unix(), metaRef)
+	err = pb.Put(ctx, filepath.Join(namespace, "mtdt"), time.Now().Unix(), metaRef)
 	if err != nil {
 		return fmt.Errorf("addRoot: failed to publish root metadata: %w", err)
 	}
+	fmt.Printf("\n\nRoot %v added successfully\n\n", namespace)
 	return nil
 }
 
 // initCache initializes the cache and marks whether any of the rootPaths were found.
-func initCache(ctx context.Context, lk lookuper.Lookuper, pb publisher.Publisher, store store.PutGetter, splitter file.Splitter) error {
+func initCache(ctx context.Context, lk lookuper.Lookuper, pb publisher.Publisher, store store.PutGetter, splitter file.Splitter, namespace string) error {
 	logger.Debug("initCache Hit")
-	queue := []string{"/"}
+	queue := []string{namespace}
 
 	// Process each path in the queue
 	for len(queue) > 0 {
@@ -247,9 +252,10 @@ func initCache(ctx context.Context, lk lookuper.Lookuper, pb publisher.Publisher
 		// Retrieve metadata reference for the current path
 		metaRef, err := lk.Get(ctx, filepath.Join(parentPath, "mtdt"), time.Now().Unix())
 		if err != nil {
-			if parentPath == "/" {
+			if parentPath == namespace {
 				logger.Warn("initCache: root path does not exist.", slog.String("error", err.Error()))
-				err = addRoot(ctx, splitter, pb)
+				logger.Debug("initCache: Adding root path", slog.String("path", parentPath))
+				err = addRoot(ctx, splitter, pb, namespace)
 				if err != nil {
 					return fmt.Errorf("initCache: failed to add root: %w", err)
 				}
@@ -263,9 +269,10 @@ func initCache(ctx context.Context, lk lookuper.Lookuper, pb publisher.Publisher
 		metaJoiner, _, err := joiner.New(ctx, store, store, metaRef)
 		if err != nil {
 			logger.Warn("initCache: failed to create reader for metadata", slog.String("path", parentPath), slog.String("error", err.Error()))
-			if parentPath == "/" {
+			logger.Debug("initCache: Adding root path", slog.String("path", parentPath))
+			if parentPath == namespace {
 				logger.Warn("initCache: root path does not exist.", slog.String("error", err.Error()))
-				err = addRoot(ctx, splitter, pb)
+				err = addRoot(ctx, splitter, pb, namespace)
 				if err != nil {
 					return fmt.Errorf("initCache: failed to add root: %w", err)
 				}
@@ -288,7 +295,7 @@ func initCache(ctx context.Context, lk lookuper.Lookuper, pb publisher.Publisher
 }
 
 // New constructs a new swarmDriver instance.
-func New(lk Lookuper, pb Publisher, store store.PutGetter, splitter file.Splitter, encrypt bool) *swarmDriver {
+func New(lk Lookuper, pb Publisher, store store.PutGetter, splitter file.Splitter, encrypt bool, namespace string) *swarmDriver {
 	logger.Debug("Creating new Instance of swarm-driver")
 	d := &swarmDriver{
 		store:     store,
@@ -296,6 +303,7 @@ func New(lk Lookuper, pb Publisher, store store.PutGetter, splitter file.Splitte
 		lookuper:  lk,
 		publisher: pb,
 		splitter:  splitter,
+		namespace: namespace,
 	}
 	logger.Debug("New: Swarm driver successfully created!")
 	return d
@@ -326,9 +334,9 @@ func isValidPath(path string) error {
 		return fmt.Errorf("isValidPath: Invalid Path: Path should not be /")
 	}
 	// A path is invalid if it does not start with a "/"
-	if !strings.HasPrefix(path, "/") {
-		return fmt.Errorf("isValidPath: Invalid Path: Path should contain / at the start")
-	}
+	// if !strings.HasPrefix(path, "/") {
+	// 	return fmt.Errorf("isValidPath: Invalid Path: Path should contain / at the start")
+	// }
 	// A path is invalid if it ends with a "/"
 	if strings.HasSuffix(path, "/") {
 		return fmt.Errorf("isValidPath: Invalid Path: Path should not contain / at the end")
@@ -393,17 +401,19 @@ func (d *swarmDriver) putMetadata(ctx context.Context, path string, meta metaDat
 	if err != nil {
 		return fmt.Errorf("putMetadata: failed to marshal metadata: %v", err)
 	}
+	logger.Debug("putMetadata: Metadata marshalled", slog.String("metaBuf", string(metaBuf)))
 	// Split the metadata and get a reference
 	metaRef, err := d.splitter.Split(ctx, io.NopCloser(bytes.NewReader(metaBuf)), int64(len(metaBuf)), d.encrypt)
 	if err != nil || isZeroAddress(metaRef) {
 		return fmt.Errorf("putMetadata: failed to split metadata: %v", err)
 	}
+	logger.Debug("putMetadata: Metadata split", slog.String("metaRef", metaRef.String()))
 	// Publish the metadata
 	err = d.publisher.Put(ctx, filepath.Join(path, "mtdt"), time.Now().Unix(), metaRef)
 	if err != nil {
 		return fmt.Errorf("putMetadata: failed to publish metadata: %v", err)
 	}
-	if path == "/" {
+	if path == d.namespace {
 		return nil
 	}
 	// Update metadata for each parent directory up to the root
@@ -448,7 +458,7 @@ TRAVERSE:
 
 		// Move up to the parent directory
 		path = currentPath
-		if path == "/" {
+		if path == d.namespace {
 			break TRAVERSE
 		}
 	}
@@ -499,16 +509,19 @@ func (d *swarmDriver) putData(ctx context.Context, path string, data []byte) err
 		}
 		return nil
 	}
+	logger.Debug("putData: Data size", slog.Int("size", len(data)))
 	// Split the data into chunks and get a reference.
 	dataRef, err := d.splitter.Split(ctx, io.NopCloser(bytes.NewReader(data)), int64(len(data)), d.encrypt)
 	if err != nil || isZeroAddress(dataRef) {
 		return fmt.Errorf("putData: failed to split data: %v", err)
 	}
+	logger.Debug("putData: Data split", slog.String("dataRef", dataRef.String()))
 	// Publish the data reference.
 	err = d.publisher.Put(ctx, filepath.Join(path, "data"), time.Now().Unix(), dataRef)
 	if err != nil {
 		return fmt.Errorf("putData: failed to publish data reference: %v", err)
 	}
+	logger.Debug("putData: Success!", slog.String("path", path))
 	return nil
 }
 
@@ -537,7 +550,7 @@ func (d *swarmDriver) deleteMetadata(ctx context.Context, path string) error {
 }
 
 func (d *swarmDriver) childExists(ctx context.Context, path string) error {
-	if path == "/" {
+	if path == d.namespace {
 		return nil
 	}
 	// Traverse up the directory tree to check if each parent contains the child
@@ -561,7 +574,7 @@ func (d *swarmDriver) childExists(ctx context.Context, path string) error {
 			return fmt.Errorf("childExists: child %s not found in parent %s", childPath, parentPath)
 		}
 		// If we have reached the root, break the loop
-		if parentPath == "/" {
+		if parentPath == d.namespace {
 			break
 		}
 		// Move up to the parent directory
@@ -575,6 +588,7 @@ func (d *swarmDriver) childExists(ctx context.Context, path string) error {
 func (d *swarmDriver) GetContent(ctx context.Context, path string) ([]byte, error) {
 	d.mutex.RLock()
 	defer d.mutex.RUnlock()
+	path = filepath.ToSlash(filepath.Join(d.namespace, path))
 	logger.Debug("GetContent Hit", slog.String("path", path))
 	if err := isValidPath(path); err != nil {
 		logger.Error("GetContent: Invalid path", slog.String("error", err.Error()))
@@ -605,6 +619,7 @@ func (d *swarmDriver) GetContent(ctx context.Context, path string) ([]byte, erro
 func (d *swarmDriver) PutContent(ctx context.Context, path string, content []byte) error {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
+	path = filepath.ToSlash(filepath.Join(d.namespace, path))
 	logger.Debug("PutContent Hit", slog.String("path", path))
 	if err := isValidPath(path); err != nil {
 		logger.Error("GetContent: Invalid path", slog.String("error", err.Error()))
@@ -635,6 +650,7 @@ func (d *swarmDriver) PutContent(ctx context.Context, path string, content []byt
 func (d *swarmDriver) Reader(ctx context.Context, path string, offset int64) (io.ReadCloser, error) {
 	d.mutex.RLock()
 	defer d.mutex.RUnlock()
+	path = filepath.ToSlash(filepath.Join(d.namespace, path))
 	logger.Debug("Reader Hit", slog.String("path", path))
 	if offset < 0 {
 		logger.Error("Reader: Invalid offset", slog.String("path", path), slog.Int64("offset", offset))
@@ -672,6 +688,7 @@ func (d *swarmDriver) Reader(ctx context.Context, path string, offset int64) (io
 func (d *swarmDriver) Stat(ctx context.Context, path string) (storagedriver.FileInfo, error) {
 	d.mutex.RLock()
 	defer d.mutex.RUnlock()
+	path = filepath.ToSlash(filepath.Join(d.namespace, path))
 	logger.Debug("Stat Hit", slog.String("path", path))
 	// Fetch metadata using the helper function
 	mtdt, err := d.getMetadata(ctx, path)
@@ -697,6 +714,7 @@ func (d *swarmDriver) Stat(ctx context.Context, path string) (storagedriver.File
 func (d *swarmDriver) List(ctx context.Context, path string) ([]string, error) {
 	d.mutex.RLock()
 	defer d.mutex.RUnlock()
+	path = filepath.ToSlash(filepath.Join(d.namespace, path))
 	logger.Debug("List Hit", slog.String("path", path))
 	if err := d.childExists(ctx, path); err != nil {
 		logger.Error("List: Child not found", slog.String("error", err.Error()))
@@ -728,8 +746,9 @@ func (d *swarmDriver) List(ctx context.Context, path string) ([]string, error) {
 func (d *swarmDriver) Delete(ctx context.Context, path string) error {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
+	path = filepath.ToSlash(filepath.Join(d.namespace, path))
 	logger.Debug("Delete Hit", slog.String("path", path))
-	if path != "/" {
+	if path != d.namespace {
 		// Remove the path from the parent's children
 		parentPath := filepath.ToSlash(filepath.Dir(path))
 		childPath := filepath.Base(path)
@@ -767,6 +786,8 @@ func (d *swarmDriver) Delete(ctx context.Context, path string) error {
 func (d *swarmDriver) Move(ctx context.Context, sourcePath string, destPath string) error {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
+	sourcePath = filepath.ToSlash(filepath.Join(d.namespace, sourcePath))
+	destPath = filepath.ToSlash(filepath.Join(d.namespace, destPath))
 	logger.Debug("Move Hit", slog.String("sourcePath", sourcePath), slog.String("destPath", destPath))
 	// 1. Lookup and read source metadata
 	sourceMeta, err := d.getMetadata(ctx, sourcePath)
@@ -881,6 +902,7 @@ func (d *swarmDriver) RedirectURL(*http.Request, string) (string, error) {
 // Walk traverses a filesystem defined within driver, starting
 // from the given path, calling f on each file and directory
 func (d *swarmDriver) Walk(ctx context.Context, path string, f storagedriver.WalkFn, options ...func(*storagedriver.WalkOptions)) error {
+	path = filepath.ToSlash(filepath.Join(d.namespace, path))
 	logger.Debug("Walk Hit", slog.String("path", path))
 	return storagedriver.WalkFallback(ctx, d, path, f, options...)
 }
@@ -903,6 +925,7 @@ type swarmFile struct {
 func (d *swarmDriver) Writer(ctx context.Context, path string, append bool) (storagedriver.FileWriter, error) {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
+	path = filepath.ToSlash(filepath.Join(d.namespace, path))
 	logger.Debug("Writer Hit", slog.String("path", path), slog.Bool("append", append))
 	var combinedData bytes.Buffer
 	w := &swarmFile{

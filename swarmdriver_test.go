@@ -42,7 +42,7 @@ func newSwarmDriverInMemoryConstructor() (storagedriver.StorageDriver, error) {
 	logger.Debug("Starting Inmemory SwarmDriver")
 	privateKeyStr := "8e5c893846223894ed783acd26de67ce7d8a614107259dce1c6d6e42da4d24f57a22536487c200c38337afaa3f514ecdd38006657f4e05725baa21e4cf606892054e00dd947d6e737c4be92306d49fa4"
 	encrypt := false
-
+	namespace := "test1"
 	signer := getTestSigner(privateKeyStr)
 	ethAddress, err := signer.EthereumAddress()
 	if err != nil {
@@ -56,12 +56,12 @@ func newSwarmDriverInMemoryConstructor() (storagedriver.StorageDriver, error) {
 	newSplitter := splitter.NewSimpleSplitter(store)
 
 	ctx := context.Background()
-	err = swarmdriver.InitCache(ctx, lk, pb, store, newSplitter)
+	err = swarmdriver.InitCache(ctx, lk, pb, store, newSplitter, namespace)
 	if err != nil {
 		return nil, fmt.Errorf("Inmemory Test: failed to init cache: %v", err)
 	}
 
-	return swarmdriver.New(lk, pb, store, newSplitter, encrypt), nil
+	return swarmdriver.New(lk, pb, store, newSplitter, encrypt, namespace), nil
 }
 
 func TestInMemorySwarmDriverSuite(t *testing.T) {
@@ -89,6 +89,7 @@ func newSwarmDriverBeeConstructor(t *testing.T) (storagedriver.StorageDriver, er
 	host := "localhost"
 	port := 1633
 	signer := getTestSigner(privateKeyStr)
+	namespace := "test1"
 	ethAddress, err := signer.EthereumAddress()
 	if err != nil {
 		return nil, fmt.Errorf("Bee Test: failed to get ethereum address: %v", err)
@@ -110,12 +111,12 @@ func newSwarmDriverBeeConstructor(t *testing.T) (storagedriver.StorageDriver, er
 	pb := publisher.New(logger.With("component", "publisher"), fstore, signer, lookuper.Latest(fstore, ethAddress))
 	newSplitter := splitter.NewSimpleSplitter(bstore)
 
-	err = swarmdriver.InitCache(ctx, lk, pb, bstore, newSplitter)
+	err = swarmdriver.InitCache(ctx, lk, pb, bstore, newSplitter, namespace)
 	if err != nil {
 		return nil, fmt.Errorf("Bee Test: failed to init cache: %v", err)
 	}
 
-	return swarmdriver.New(lk, pb, bstore, newSplitter, encrypt), nil
+	return swarmdriver.New(lk, pb, bstore, newSplitter, encrypt, namespace), nil
 }
 
 func TestBeeSwarmDriverSuite(t *testing.T) {

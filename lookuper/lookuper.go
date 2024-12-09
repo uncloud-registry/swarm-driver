@@ -35,7 +35,6 @@ func New(logger *slog.Logger, store store.PutGetter, owner common.Address) Looku
 
 func (l *lookuperImpl) Get(ctx context.Context, id string, version int64) (swarm.Address, error) {
 	start := time.Now()
-
 	lk, err := factory.New(l.store).NewLookup(feeds.Sequence, feeds.New([]byte(id), l.owner))
 	if err != nil {
 		return swarm.ZeroAddress, fmt.Errorf("failed creating lookuper %w", err)

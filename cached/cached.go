@@ -2,6 +2,7 @@ package cached
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -50,7 +51,9 @@ func New(
 func (c *CachedLookuperPublisher) Get(ctx context.Context, id string, version int64) (swarm.Address, error) {
 	start := time.Now()
 	c.mtx.RLock()
+	fmt.Println("id", id, "version", version)
 	cRef, found := c.cached.Get(id)
+	fmt.Println("cached", cRef)
 	c.mtx.RUnlock()
 	if found {
 		if time.Since(time.Unix(cRef.ts, 0)) > 3*time.Second {
