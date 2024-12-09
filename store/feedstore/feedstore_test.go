@@ -1,7 +1,6 @@
 package feedstore_test
 
 import (
-	"bytes"
 	"context"
 	"encoding/hex"
 	"io"
@@ -22,7 +21,8 @@ import (
 )
 
 func TestStoreCorrectness(t *testing.T) {
-	srvURLStr := newTestServer(t, teststore.NewSwarmInMemoryStore())
+	store := teststore.NewSwarmInMemoryStore()
+	srvURLStr := newTestServer(t, store)
 	srvURL, err := url.Parse(srvURLStr)
 	if err != nil {
 		t.Fatal(err)
@@ -36,7 +36,7 @@ func TestStoreCorrectness(t *testing.T) {
 	bId := swarm.NewAddress(postagetesting.MustNewID()).String()
 	sch := soctesting.GenerateMockSOC(t, []byte("dummy"))
 
-	st, err := feedstore.NewFeedStore(host, port, false, false, bId, hex.EncodeToString(sch.Owner))
+	st, err := feedstore.NewFeedStore(host, port, false, bId, hex.EncodeToString(sch.Owner), store)
 	if err != nil {
 		t.Fatal("failed creating new beestore")
 	}
@@ -116,23 +116,6 @@ func newTestServer(t *testing.T, store *teststore.SwarmInMemoryStore) string {
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
-	})
-
-	handler.HandleFunc("/chunks/{address}", func(w http.ResponseWriter, r *http.Request) {
-		addrStr := r.PathValue("address")
-		addr, err := swarm.ParseHexAddress(addrStr)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		ch, err := store.Get(context.Background(), addr)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "binary/octet-stream")
-		w.Header().Set("Content-Length", strconv.FormatInt(int64(len(ch.Data())), 10))
-		_, _ = io.Copy(w, bytes.NewReader(ch.Data()))
 	})
 
 	server := httptest.NewServer(handler)

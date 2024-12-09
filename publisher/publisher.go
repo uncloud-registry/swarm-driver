@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"sync"
 
@@ -27,6 +28,7 @@ type pubImpl struct {
 	signer     crypto.Signer
 	loader     Loader
 	updaterMap sync.Map
+	logger     *slog.Logger
 }
 
 type feedState struct {
@@ -34,8 +36,8 @@ type feedState struct {
 	ts        int64
 }
 
-func New(putter storage.Putter, signer crypto.Signer, loader Loader) Publisher {
-	return &pubImpl{putter: putter, signer: signer, loader: loader}
+func New(logger *slog.Logger, putter storage.Putter, signer crypto.Signer, loader Loader) Publisher {
+	return &pubImpl{putter: putter, signer: signer, loader: loader, logger: logger}
 }
 
 func (p *pubImpl) Put(ctx context.Context, id string, version int64, ref swarm.Address) error {
@@ -45,7 +47,7 @@ func (p *pubImpl) Put(ctx context.Context, id string, version int64, ref swarm.A
 	if !found {
 		currIndex, at, err := p.loader(ctx, id)
 		if err == nil {
-			log.Infof("publisher: loaded initial version %s timestamp %d", currIndex, at)
+			p.logger.Debug("publisher: loaded initial version", "version", currIndex, "timestamp", at)
 			nxtIndex = currIndex.Next(at, uint64(version))
 		} else {
 			nxtIndex = new(index)
@@ -61,8 +63,7 @@ func (p *pubImpl) Put(ctx context.Context, id string, version int64, ref swarm.A
 	}
 
 	p.updaterMap.Store(id, feedState{currIndex: nxtIndex, ts: version})
-
-	log.Debugf("updated id %s version %d ref %s", id, version, ref.String())
+	p.logger.Debug("publisher: updated", "id", id, "version", version, "ref", ref.String())
 
 	return nil
 }
