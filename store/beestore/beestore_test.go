@@ -14,7 +14,6 @@ import (
 	postagetesting "github.com/ethersphere/bee/v2/pkg/postage/testing"
 	testingc "github.com/ethersphere/bee/v2/pkg/storage/testing"
 	"github.com/ethersphere/bee/v2/pkg/swarm"
-	"github.com/gorilla/websocket"
 	"github.com/uncloud-registry/swarm-driver/store/beestore"
 	"github.com/uncloud-registry/swarm-driver/store/teststore"
 )
@@ -92,40 +91,27 @@ func newTestServer(t *testing.T, store *teststore.SwarmInMemoryStore) string {
 	t.Helper()
 	handler := http.NewServeMux()
 
-	handler.HandleFunc("/chunks/stream", func(w http.ResponseWriter, r *http.Request) {
-		upgrader := websocket.Upgrader{}
+	handler.HandleFunc("POST /chunks", func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
 
-		conn, err := upgrader.Upgrade(w, r, nil)
+		data, err := io.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		defer conn.Close()
 
-		for {
-			_, msg, err := conn.ReadMessage()
-			if err != nil {
-				break
-			}
-
-			if len(msg) < swarm.SpanSize {
-				conn.WriteMessage(websocket.TextMessage, []byte(err.Error()))
-				return
-			}
-
-			ch, err := cac.NewWithDataSpan(msg)
-			if err != nil {
-				conn.WriteMessage(websocket.TextMessage, []byte(err.Error()))
-				return
-			}
-
-			if err := store.Put(context.Background(), ch); err != nil {
-				conn.WriteMessage(websocket.TextMessage, []byte(err.Error()))
-				continue
-			}
-
-			conn.WriteMessage(websocket.BinaryMessage, []byte{})
+		ch, err := cac.NewWithDataSpan(data)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
+
+		if err := store.Put(r.Context(), ch); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
 	})
 
 	handler.HandleFunc("/chunks/{address}", func(w http.ResponseWriter, r *http.Request) {
