@@ -102,7 +102,7 @@ func newSwarmDriverBeeConstructor(t *testing.T) (storagedriver.StorageDriver, er
 	if err != nil {
 		return nil, fmt.Errorf("Bee Test: failed to create BeeStore: %v", err)
 	}
-	fstore, err := feedstore.NewFeedStore(host, port, false, batchID, owner, bstore)
+	fstore, err := feedstore.NewFeedStore(host, port, false, batchID, owner, bstore, true)
 	if err != nil {
 		return nil, fmt.Errorf("Bee Test: failed to create feedstore: %v", err)
 	}

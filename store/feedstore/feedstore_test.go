@@ -36,7 +36,7 @@ func TestStoreCorrectness(t *testing.T) {
 	bId := swarm.NewAddress(postagetesting.MustNewID()).String()
 	sch := soctesting.GenerateMockSOC(t, []byte("dummy"))
 
-	st, err := feedstore.NewFeedStore(host, port, false, bId, hex.EncodeToString(sch.Owner), store)
+	st, err := feedstore.NewFeedStore(host, port, false, bId, hex.EncodeToString(sch.Owner), store, false)
 	if err != nil {
 		t.Fatal("failed creating new beestore")
 	}

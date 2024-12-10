@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -21,9 +23,10 @@ type FeedStore struct {
 	baseUrl string
 	owner   string
 	batch   string
+	tag     string
 }
 
-func NewFeedStore(host string, port int, tls bool, batch, owner string, getter storage.Getter) (*FeedStore, error) {
+func NewFeedStore(host string, port int, tls bool, batch, owner string, getter storage.Getter, createTag bool) (*FeedStore, error) {
 	scheme := "http"
 	if tls {
 		scheme += "s"
@@ -33,13 +36,42 @@ func NewFeedStore(host string, port int, tls bool, batch, owner string, getter s
 		Scheme: scheme,
 		Path:   "soc",
 	}
-	return &FeedStore{
+
+	f := &FeedStore{
 		Client:  http.DefaultClient,
 		getter:  getter,
 		baseUrl: u.String(),
 		owner:   owner,
 		batch:   batch,
-	}, nil
+	}
+
+	if createTag {
+		tagUrl := &url.URL{
+			Host:   fmt.Sprintf("%s:%d", host, port),
+			Scheme: scheme,
+			Path:   "tags",
+		}
+		res, err := http.Post(tagUrl.String(), "application/json", nil)
+		if err != nil {
+			return nil, fmt.Errorf("Beestore: NewBeeStore: failed creating tag %w", err)
+		}
+		resBody, err := io.ReadAll(res.Body)
+		if err != nil {
+			return nil, fmt.Errorf("Beestore: NewBeeStore: failed to read tag body %w", err)
+		}
+		val := make(map[string]interface{})
+		err = json.Unmarshal(resBody, &val)
+		if err != nil {
+			return nil, fmt.Errorf("Beestore: NewBeeStore: error unmarshalling response body %w", err)
+		}
+		intVal, ok := val["uid"].(float64)
+		if !ok {
+			return nil, fmt.Errorf("Beestore: NewBeeStore: error converting uid value %v", val["uid"])
+		}
+		f.tag = fmt.Sprintf("%d", int(intVal))
+	}
+
+	return f, nil
 }
 
 func (f *FeedStore) Get(ctx context.Context, address swarm.Address) (swarm.Chunk, error) {

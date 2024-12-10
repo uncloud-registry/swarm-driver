@@ -182,7 +182,7 @@ func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[st
 			return nil, fmt.Errorf("Create: failed to create cachedstore: %v", err)
 		}
 		newSplitter = splitter.NewSimpleSplitter(store)
-		fstore, err := feedstore.NewFeedStore(host, port, false, batchID, owner, store)
+		fstore, err := feedstore.NewFeedStore(host, port, false, batchID, owner, store, true)
 		if err != nil {
 			return nil, fmt.Errorf("Create: failed to create feedstore: %v", err)
 		}
