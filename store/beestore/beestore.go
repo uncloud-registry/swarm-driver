@@ -107,7 +107,7 @@ func (b *BeeStore) Put(ctx context.Context, ch swarm.Chunk) (err error) {
 	}
 
 	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
+	if res.StatusCode != http.StatusCreated {
 		return fmt.Errorf("Beestore: Put: failed putting chunk %s %w", ch.Address().String(), storage.ErrInvalidChunk)
 	}
 
