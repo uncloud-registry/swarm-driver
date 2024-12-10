@@ -114,6 +114,9 @@ func (f *FeedStore) putSOCChunk(ctx context.Context, ch swarm.Chunk) error {
 		return fmt.Errorf("FeedStore: putSOCChunk: failed creating HTTP req %w", err)
 	}
 	req.Header.Set("Swarm-Postage-Batch-Id", f.batch)
+	if f.tag != "" {
+		req.Header.Set("Swarm-Tag", f.tag)
+	}
 	resp, err := f.Client.Do(req)
 	if err != nil {
 		return fmt.Errorf("FeedStore: putSOCChunk: failed executing HTTP req %w", err)
