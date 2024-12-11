@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -13,7 +15,6 @@ import (
 	"github.com/ethersphere/bee/v2/pkg/soc"
 	"github.com/ethersphere/bee/v2/pkg/storage"
 	"github.com/ethersphere/bee/v2/pkg/swarm"
-	"github.com/uncloud-registry/swarm-driver/store/beestore"
 )
 
 type FeedStore struct {
@@ -22,14 +23,10 @@ type FeedStore struct {
 	baseUrl string
 	owner   string
 	batch   string
-	pin     bool
+	tag     string
 }
 
-func NewFeedStore(host string, port int, tls, pin bool, batch, owner string) (*FeedStore, error) {
-	chunkGetter, err := beestore.NewBeeStore(host, port, tls, batch, true, false)
-	if err != nil {
-		return nil, fmt.Errorf("FeedStore: NewFeedStore: failed creating chunk getter %w", err)
-	}
+func NewFeedStore(host string, port int, tls bool, batch, owner string, getter storage.Getter, createTag bool) (*FeedStore, error) {
 	scheme := "http"
 	if tls {
 		scheme += "s"
@@ -39,14 +36,42 @@ func NewFeedStore(host string, port int, tls, pin bool, batch, owner string) (*F
 		Scheme: scheme,
 		Path:   "soc",
 	}
-	return &FeedStore{
+
+	f := &FeedStore{
 		Client:  http.DefaultClient,
-		getter:  chunkGetter,
+		getter:  getter,
 		baseUrl: u.String(),
 		owner:   owner,
 		batch:   batch,
-		pin:     pin,
-	}, nil
+	}
+
+	if createTag {
+		tagUrl := &url.URL{
+			Host:   fmt.Sprintf("%s:%d", host, port),
+			Scheme: scheme,
+			Path:   "tags",
+		}
+		res, err := http.Post(tagUrl.String(), "application/json", nil)
+		if err != nil {
+			return nil, fmt.Errorf("Beestore: NewBeeStore: failed creating tag %w", err)
+		}
+		resBody, err := io.ReadAll(res.Body)
+		if err != nil {
+			return nil, fmt.Errorf("Beestore: NewBeeStore: failed to read tag body %w", err)
+		}
+		val := make(map[string]interface{})
+		err = json.Unmarshal(resBody, &val)
+		if err != nil {
+			return nil, fmt.Errorf("Beestore: NewBeeStore: error unmarshalling response body %w", err)
+		}
+		intVal, ok := val["uid"].(float64)
+		if !ok {
+			return nil, fmt.Errorf("Beestore: NewBeeStore: error converting uid value %v", val["uid"])
+		}
+		f.tag = fmt.Sprintf("%d", int(intVal))
+	}
+
+	return f, nil
 }
 
 func (f *FeedStore) Get(ctx context.Context, address swarm.Address) (swarm.Chunk, error) {
@@ -54,7 +79,6 @@ func (f *FeedStore) Get(ctx context.Context, address swarm.Address) (swarm.Chunk
 }
 
 func (f *FeedStore) Put(ctx context.Context, ch swarm.Chunk) (err error) {
-
 	if !soc.Valid(ch) {
 		return errors.New("FeedStore: Put: chunk not a single owner chunk")
 	}
@@ -90,8 +114,8 @@ func (f *FeedStore) putSOCChunk(ctx context.Context, ch swarm.Chunk) error {
 		return fmt.Errorf("FeedStore: putSOCChunk: failed creating HTTP req %w", err)
 	}
 	req.Header.Set("Swarm-Postage-Batch-Id", f.batch)
-	if f.pin {
-		req.Header.Set("Swarm-Pin", "true")
+	if f.tag != "" {
+		req.Header.Set("Swarm-Tag", f.tag)
 	}
 	resp, err := f.Client.Do(req)
 	if err != nil {

@@ -5,6 +5,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"os"
 	"testing"
 	"time"
 
@@ -17,8 +20,16 @@ import (
 	"github.com/uncloud-registry/swarm-driver/store/teststore"
 )
 
+func newTestLogger(w io.Writer) *slog.Logger {
+	testLogger := slog.NewTextHandler(w, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	})
+	return slog.New(testLogger)
+}
+
 func TestPublisher(t *testing.T) {
 	t.Parallel()
+	logger := newTestLogger(os.Stdout)
 	store := teststore.NewSwarmInMemoryStore()
 	pk, _ := crypto.GenerateSecp256k1Key()
 	signer := crypto.NewDefaultSigner(pk)
@@ -28,6 +39,7 @@ func TestPublisher(t *testing.T) {
 	}
 	t.Run("new", func(t *testing.T) {
 		pub := publisher.New(
+			logger,
 			store,
 			signer,
 			func(_ context.Context, _ string) (feeds.Index, int64, error) {
@@ -69,6 +81,7 @@ func TestPublisher(t *testing.T) {
 	})
 	t.Run("existing state", func(t *testing.T) {
 		pub := publisher.New(
+			logger,
 			store,
 			signer,
 			func(ctx context.Context, id string) (feeds.Index, int64, error) {

@@ -24,7 +24,6 @@ import (
 	"github.com/ethersphere/bee/v2/pkg/file/splitter"
 	"github.com/ethersphere/bee/v2/pkg/swarm"
 
-	"github.com/uncloud-registry/swarm-driver/cached"
 	"github.com/uncloud-registry/swarm-driver/lookuper"
 	"github.com/uncloud-registry/swarm-driver/publisher"
 	"github.com/uncloud-registry/swarm-driver/store"
@@ -159,9 +158,9 @@ func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[st
 	if inmemory {
 		logger.Debug("Creating New Inmemory Swarm Driver")
 		store = teststore.NewSwarmInMemoryStore()
-		lk = lookuper.New(store, ethAddress)
+		lk = lookuper.New(logger.With("component", "lookuper"), store, ethAddress)
 		// Initialize the publisher with the store, signer, and the latest lookuper.
-		pb = publisher.New(store, signer, lookuper.Latest(store, ethAddress))
+		pb = publisher.New(logger.With("component", "publisher"), store, signer, lookuper.Latest(store, ethAddress))
 		// Initialize the splitter for splitting files into chunks.
 		newSplitter = splitter.NewSimpleSplitter(store)
 	} else {
@@ -181,27 +180,21 @@ func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[st
 		if err != nil {
 			return nil, fmt.Errorf("Create: failed to create cachedstore: %v", err)
 		}
-		fstore, err := feedstore.NewFeedStore(host, port, false, true, batchID, owner)
+		newSplitter = splitter.NewSimpleSplitter(store)
+		fstore, err := feedstore.NewFeedStore(host, port, false, batchID, owner, store, true)
 		if err != nil {
 			return nil, fmt.Errorf("Create: failed to create feedstore: %v", err)
 		}
-		clp, err := cached.New(
-			lookuper.New(fstore, ethAddress),
-			publisher.New(fstore, signer, lookuper.Latest(fstore, ethAddress)),
-			120*time.Second,
-		)
+		cfstore, err := cachedstore.New(fstore)
 		if err != nil {
-			return nil, fmt.Errorf("Create: failed to create cached lookuper publisher: %v", err)
+			return nil, fmt.Errorf("Create: failed to create cachedstore: %v", err)
 		}
-		newSplitter = splitter.NewSimpleSplitter(store)
-		err = initCache(ctx, clp, clp, store, newSplitter)
+		lk = lookuper.New(logger.With("component", "lookuper"), cfstore, ethAddress)
+		pb = publisher.New(logger.With("component", "publisher"), cfstore, signer, lookuper.Latest(cfstore, ethAddress))
+		err = initCache(ctx, lk, pb, store, newSplitter)
 		if err != nil {
 			return nil, fmt.Errorf("Create: failed to initialize cache: %v", err)
 		}
-		clp.SetTimeout(500 * time.Millisecond)
-		lk = clp
-		pb = clp
-
 	}
 	// Pass the signer to the New function instead of generating the key inside.
 	return New(lk, pb, store, newSplitter, encrypt), nil
