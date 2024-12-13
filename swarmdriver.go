@@ -24,6 +24,7 @@ import (
 	"github.com/ethersphere/bee/v2/pkg/file/splitter"
 	"github.com/ethersphere/bee/v2/pkg/swarm"
 
+	"github.com/uncloud-registry/swarm-driver/cached"
 	"github.com/uncloud-registry/swarm-driver/lookuper"
 	"github.com/uncloud-registry/swarm-driver/publisher"
 	"github.com/uncloud-registry/swarm-driver/store"
@@ -191,6 +192,12 @@ func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[st
 		}
 		lk = lookuper.New(logger.With("component", "lookuper"), cfstore, ethAddress)
 		pb = publisher.New(logger.With("component", "publisher"), cfstore, signer, lookuper.Latest(cfstore, ethAddress))
+		clp, err := cached.New(logger.With("component", "cached"), lk, pb, 3*time.Second)
+		if err != nil {
+			return nil, fmt.Errorf("Create: failed to create cached lookuper: %v", err)
+		}
+		lk = clp
+		pb = clp
 		err = initCache(ctx, lk, pb, store, newSplitter)
 		if err != nil {
 			return nil, fmt.Errorf("Create: failed to initialize cache: %v", err)
