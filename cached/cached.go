@@ -53,25 +53,14 @@ func (c *CachedLookuperPublisher) Get(ctx context.Context, id string, version in
 	cRef, found := c.cached.Get(id)
 	c.mtx.RUnlock()
 	if found {
-		if time.Since(time.Unix(cRef.ts, 0)) > 3*time.Second {
-			go func() {
-				ref, err := c.get(context.Background(), id, version)
-				if err == nil {
-					c.mtx.Lock()
-					_ = c.cached.Add(id, cachedResult{ref: ref, err: err, ts: time.Now().Unix()})
-					c.mtx.Unlock()
-				}
-			}()
-		}
-		res := cRef
 		c.logger.Debug(
 			"returning cached result",
 			"id", id,
-			"ref", res.ref.String(),
-			"err", res.err,
+			"ref", cRef.ref.String(),
+			"err", cRef.err,
 			"duration", time.Since(start),
 		)
-		return res.ref, res.err
+		return cRef.ref, cRef.err
 	}
 	ref, err := c.get(ctx, id, version)
 	c.mtx.Lock()
