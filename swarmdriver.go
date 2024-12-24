@@ -192,7 +192,7 @@ func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[st
 		}
 		lk = lookuper.New(logger.With("component", "lookuper"), cfstore, ethAddress)
 		pb = publisher.New(logger.With("component", "publisher"), cfstore, signer, lookuper.Latest(cfstore, ethAddress))
-		clp, err := cached.New(logger.With("component", "cached"), lk, pb, 3*time.Second)
+		clp, err := cached.New(logger.With("component", "cached"), lk, pb, 10*time.Second)
 		if err != nil {
 			return nil, fmt.Errorf("Create: failed to create cached lookuper: %v", err)
 		}
@@ -202,6 +202,7 @@ func (factory *swarmDriverFactory) Create(ctx context.Context, parameters map[st
 		if err != nil {
 			return nil, fmt.Errorf("Create: failed to initialize cache: %v", err)
 		}
+		clp.SetTimeout(1 * time.Second)
 	}
 	// Pass the signer to the New function instead of generating the key inside.
 	return New(lk, pb, store, newSplitter, encrypt), nil

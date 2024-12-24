@@ -1,8 +1,8 @@
 module github.com/uncloud-registry/swarm-driver
 
-go 1.22.4
+go 1.23
 
-toolchain go1.23.0
+toolchain go1.23.3
 
 require (
 	github.com/distribution/distribution/v3 v3.0.0-beta.1
@@ -13,7 +13,7 @@ require (
 	github.com/testcontainers/testcontainers-go v0.34.0
 )
 
-replace github.com/codahale/hdrhistogram v0.0.0-00010101000000-000000000000 => github.com/HdrHistogram/hdrhistogram-go v1.1.2
+replace github.com/codahale/hdrhistogram => github.com/HdrHistogram/hdrhistogram-go v0.0.0-20200919145931-8dac23c8dac1
 
 require (
 	dario.cat/mergo v1.0.0 // indirect
