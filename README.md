@@ -1,113 +1,117 @@
 # swarm-driver
 This is an implementation of docker storage driver on the swarm
+
+In order to run this we need to clone 3 repos:
+
+1. This repo with the driver implementation
 ```
-type StorageDriver interface {
-	// Name returns the human-readable "name" of the driver, useful in error
-	// messages and logging. By convention, this will just be the registration
-	// name, but drivers may provide other information here.
-	Name() string
-
-	// GetContent retrieves the content stored at "path" as a []byte.
-	// This should primarily be used for small objects.
-	GetContent(ctx context.Context, path string) ([]byte, error)
-
-	// PutContent stores the []byte content at a location designated by "path".
-	// This should primarily be used for small objects.
-	PutContent(ctx context.Context, path string, content []byte) error
-
-	// Reader retrieves an io.ReadCloser for the content stored at "path"
-	// with a given byte offset.
-	// May be used to resume reading a stream by providing a nonzero offset.
-	Reader(ctx context.Context, path string, offset int64) (io.ReadCloser, error)
-
-	// Writer returns a FileWriter which will store the content written to it
-	// at the location designated by "path" after the call to Commit.
-	// A path may be appended to if it has not been committed, or if the
-	// existing committed content is zero length.
-	//
-	// The behaviour of appending to paths with non-empty committed content is
-	// undefined. Specific implementations may document their own behavior.
-	Writer(ctx context.Context, path string, append bool) (FileWriter, error)
-
-	// Stat retrieves the FileInfo for the given path, including the current
-	// size in bytes and the creation time.
-	Stat(ctx context.Context, path string) (FileInfo, error)
-
-	// List returns a list of the objects that are direct descendants of the
-	// given path.
-	List(ctx context.Context, path string) ([]string, error)
-
-	// Move moves an object stored at sourcePath to destPath, removing the
-	// original object.
-	// Note: This may be no more efficient than a copy followed by a delete for
-	// many implementations.
-	Move(ctx context.Context, sourcePath string, destPath string) error
-
-	// Delete recursively deletes all objects stored at "path" and its subpaths.
-	Delete(ctx context.Context, path string) error
-
-	// RedirectURL returns a URL which the client of the request r may use
-	// to retrieve the content stored at path. Returning the empty string
-	// signals that the request may not be redirected.
-	RedirectURL(r *http.Request, path string) (string, error)
-
-	// Walk traverses a filesystem defined within driver, starting
-	// from the given path, calling f on each file.
-	// If the returned error from the WalkFn is ErrSkipDir and fileInfo refers
-	// to a directory, the directory will not be entered and Walk
-	// will continue the traversal.
-	// If the returned error from the WalkFn is ErrFilledBuffer, processing stops.
-	Walk(ctx context.Context, path string, f WalkFn, options ...func(*WalkOptions)) error
-}
+git clone git@github.com:uncloud-registry/swarm-driver.git
+```
+2. The distribution repo
+```
+git clone git@github.com:uncloud-registry/distribution.git
+```
+3. The modified swarm client
+```
+git clone git@github.com:aloknerurkar/bee.git
 ```
 
 ```
-PutContent(ctx context.Context, path string, content []byte) error
-- Add content to swarm using splitter and get reference => r2
-- Publish(path + "/data") => r2
-- Publish(path + "/mtdt") => new metadata
-- Lookup(parent(path))
-- Add path to metadata if required
-- Put metadata to swarm and get reference => r1
-- Publish(parent(path) + "/mtdt") => r1
-
-GetContent(ctx context.Context, path string) ([]byte, error)
-- Read mtdt to check if dir or file
-    - if directory return error
-- Lookup(path + "/data", latest) => ref
-- Joiner(store, ref) => data
+NOTE: The driver and distribution repos should be in the same directory as we use local dependency in go
 ```
 
+### Step 1
+Build the modified bee client. This has a small fix which allows deferred uploads of SOCs.
 ```
-Writer(ctx context.Context, path string, append bool) (FileWriter, error)
-- if append
-    - Lookup(path + "/data") => r1
-    - Read r1 and write to FileWriter
-    - Return FileWriter
-- else
-    - Return FileWriter
-
-- FileWriter commit
-    - Add all content to swarm => r2
-    - Publish(path + "/data") => r2
-    - Publish(path + "/mtdt") => new metadata
-    - Lookup(parent(path))
-    - Add path to metadata if required
-    - Put metadata to swarm and get reference => r3
-    - Publish(parent(path) + "/mtdt") => r3
-
-
-Reader(ctx context.Context, path string, offset int64) (io.ReadCloser, error)
-- Lookup(path + "/mtdt") => r1
-- Read mtdt to check if dir or file
-    - if directory return error
-- Lookup(path + "/data") => r1
-- Return ReadCloser
+cd bee
+make binary
 ```
 
+### Step 2
+Create the config for the bee node and start it. Example testnet config:
 ```
-Stat(ctx context.Context, path string) (FileInfo, error)
-- Lookup(path + "/mtdt") => r1
-- Read data and populate FileInfo
-- Return FileInfo
+api-addr: ':1633'
+p2p-addr: ':1634'
+password: aaa4eabb0813df71afa45d
+data-dir: ~/.bee-testnet
+cors-allowed-origins:
+  - '*'
+verbosity: '5'
+bootnode: ["/dnsaddr/testnet.ethswarm.org"]
+full-node: 'false'
+swap-enable: 'true'
+mainnet: false
+blockchain-rpc-endpoint: <block chain RPC endpoint for sepolia/gnosis>
+storage-incentives-enable: 'false'
+use-postage-snapshot: false
+network-id: 10
+swap-initial-deposit: '1000000000000000000'
 ```
+
+- #### Fund the account
+  Check [bee docs](https://docs.ethswarm.org/) on how to fund the node on testnet/mainnet.
+
+- #### Buy a postage stamp
+  The registry has to be initialized with a postage stamp. You can buy once you have funds and the node is synced with the network.
+  ```
+  curl -X POST http://localhost:1633/stamps/1000000000/24
+  ```
+
+### Step 3
+Build the distribution docker image. The current dockerfile is copied during the build. So there is a `config-testnet.yaml` file in the distribution repo which will be copied.
+
+Example:
+```
+version: 0.1
+log:
+  level: debug
+  fields:
+    service: registry
+    environment: development
+storage:
+    delete:
+      enabled: true
+    cache:
+        blobdescriptor: inmemory
+    swarm:
+        inmemory: false
+        encrypt: false
+        privateKey: <HEX encoded private key for publishing updates for the registry SOCs>
+        cache: true
+        host: "127.0.0.1" <IP of the machine where bee node is runninng>
+        port: 1633 <PORT no where the API is running on bee>
+        batchID: <POSTAGE STAMP ID>
+    maintenance:
+        uploadpurging:
+            enabled: false
+    tag:
+      concurrencylimit: 8
+http:
+    addr: :5000
+    debug:
+        addr: :5001
+        prometheus:
+            enabled: true
+            path: /metrics
+    headers:
+        X-Content-Type-Options: [nosniff]
+health:
+  storagedriver:
+    enabled: true
+    interval: 10s
+    threshold: 3
+
+```
+
+- #### Generating private key for SOC owner account
+  ```
+  openssl ecparam -genkey -name secp256k1 -out private_key.pem
+  ```
+
+- #### Get HEX encoding
+  ```
+  openssl ec -in private_key.pem -outform DER -out private_key.der
+  xxd -p private_key.der | tr -d '\n'
+  ```
+
+  Check out the [demo here](https://drive.google.com/file/d/1aefZZZQSrdDzsdl1SoI3TvO9LgjXAHKM/view?usp=drive_link)
