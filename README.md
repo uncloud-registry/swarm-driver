@@ -5,15 +5,15 @@ In order to run this we need to clone 3 repos:
 
 1. This repo with the driver implementation
 ```
-git clone git@github.com:uncloud-registry/swarm-driver.git
+git clone https://github.com/uncloud-registry/swarm-driver.git
 ```
 2. The distribution repo
 ```
-git clone git@github.com:uncloud-registry/distribution.git
+git clone https://github.com/uncloud-registry/distribution.git
 ```
 3. The modified swarm client
 ```
-git clone git@github.com:aloknerurkar/bee.git
+git clone https://github.com/aloknerurkar/bee.git
 ```
 
 ```
